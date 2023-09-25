@@ -1,0 +1,8 @@
+bs4
+pandas
+psycopgy2-binary
+requests
+spotipy
+sqlalchemy
+streamlit
+streamlit-aggrid

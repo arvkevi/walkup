@@ -1,0 +1,19 @@
+name: MLB Walkup scraper
+on:
+  schedule:
+    - cron: '0 1 0 1/1 * ? *'
+  workflow_dispatch:
+jobs:
+  get_walkups:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          persist-credentials: false
+      - name: Setup Python 3.10
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.10"
+      - run: |
+          pip install -r requirements.txt
+          python scraper.py ${{ secrets.CONNECTION_URI }} ${{ secrets.SPOTIFY_CLIENT_ID }} --zip-code=${{ secrets.SPOTIFY_CLIENT_SECRET }}
