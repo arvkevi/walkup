@@ -1,7 +1,7 @@
 name: MLB Walkup scraper
 on:
   schedule:
-    - cron: '0 1 0 1/1 * ? *'
+    - cron: '01 00 * * *'
   workflow_dispatch:
 jobs:
   get_walkups:
