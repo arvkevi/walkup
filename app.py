@@ -1,5 +1,6 @@
 import datetime
 import os
+import webbrowser
 
 import pandas as pd
 import psycopg2
@@ -162,7 +163,7 @@ with st.form("playlist-form", clear_on_submit=False):
         # Check if the user is redirected back to the app after login
         params = st.experimental_get_query_params()
         code = params.get("code")
-
+        spotify = None
         if code:
             code = code[0]
             sp_oauth = SpotifyOAuth(client_id=SPOTIFY_CLIENT_ID, client_secret=SPOTIFY_CLIENT_SECRET, redirect_uri="https://walkup.streamlit.app")
@@ -173,7 +174,7 @@ with st.form("playlist-form", clear_on_submit=False):
             # User is not authenticated yet. Show the authentication link.
             sp_oauth = SpotifyOAuth(client_id=SPOTIFY_CLIENT_ID, client_secret=SPOTIFY_CLIENT_SECRET, redirect_uri="https://walkup.streamlit.app")
             auth_url = sp_oauth.get_authorize_url()
-            st.write(f"Please authenticate: [Spotify Login]({auth_url})")
+            webbrowser.open_new_tab(auth_url)
 
         if spotify:
             try:
