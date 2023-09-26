@@ -21,4 +21,4 @@ jobs:
           pip install -r requirements.txt
       - name: Scrape walkups
         run: |
-          python scraper.py ${{ secrets.CONNECTION_URI }} ${{ secrets.SPOTIPY_CLIENT_ID }} ${{ secrets.SPOTIFY_CLIENT_SECRET }}
+          python scraper.py ${{ secrets.CONNECTION_URI }} ${{ secrets.SPOTIFY_CLIENT_ID }} ${{ secrets.SPOTIFY_CLIENT_SECRET }}
