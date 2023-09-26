@@ -19,6 +19,11 @@ if __name__ == "__main__":
     SPOTIFY_CLIENT_ID = sys.argv[2]
     SPOTIFY_CLIENT_SECRET = sys.argv[3]
 
+    sys.stdout.write(f"Scraping MLB walk-up songs...\n"
+                     f"Connection URI: {CONNECTION_URI}\n"
+                     f"Spotify Client ID is None: {SPOTIFY_CLIENT_ID is None}\n"
+                     f"Spotify Client Secret is None: {SPOTIFY_CLIENT_SECRET is None}\n")
+
     mlb_site = "https://mlb.com"
     music_endpoint = "ballpark/music"
 
