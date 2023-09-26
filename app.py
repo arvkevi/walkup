@@ -71,7 +71,7 @@ gif.markdown(
 config = {
     "authorization_endpoint": "https://accounts.spotify.com/authorize",
     "token_endpoint": "https://accounts.spotify.com/api/token",
-    "redirect_uri": "http://localhost:8080/",
+    "redirect_uri": "https://walkup.streamlit.app",
     "client_id": SPOTIFY_CLIENT_ID,
     "client_secret": SPOTIFY_CLIENT_SECRET,
     "scope": "playlist-modify-private",
