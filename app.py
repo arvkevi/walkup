@@ -204,5 +204,6 @@ with st.form("playlist-form", clear_on_submit=False):
                 )
         else:
             st.error("Unable to authenticate with Spotify.")
-    # Remove the token cache
-    os.remove("token.txt")
+    
+        # Remove the token cache
+        os.remove("token.txt")
