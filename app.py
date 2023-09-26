@@ -159,20 +159,23 @@ with st.form("playlist-form", clear_on_submit=False):
 
     submit = st.form_submit_button("Create Playlist")
     if submit:
-        try:
-            spotify = spotipy.Spotify(
-                oauth_manager=SpotifyOAuth(
-                    client_id=SPOTIFY_CLIENT_ID,
-                    client_secret=SPOTIFY_CLIENT_SECRET,
-                    redirect_uri="http://localhost:8080",
-                    scope="playlist-modify-private",
-                )
-            )
-        except Exception as e:
-            st.error(f"Error authenticating with Spotify: {e}")
+        # Check if the user is redirected back to the app after login
+        params = st.experimental_get_query_params()
+        code = params.get("code")
+
+        if code:
+            code = code[0]
+            sp_oauth = SpotifyOAuth(client_id=SPOTIFY_CLIENT_ID, client_secret=SPOTIFY_CLIENT_SECRET)
+            token_info = sp_oauth.get_access_token(code=code)
+            spotify = spotipy.Spotify(auth=token_info["access_token"])
+            st.write(f"Authenticated successfully as {spotify.me()['display_name']}")
+        else:
+            # User is not authenticated yet. Show the authentication link.
+            sp_oauth = SpotifyOAuth(client_id=SPOTIFY_CLIENT_ID, client_secret=SPOTIFY_CLIENT_SECRET)
+            auth_url = sp_oauth.get_authorize_url()
+            st.write(f"Please authenticate: [Spotify Login]({auth_url})")
 
         if spotify:
-            st.success("Successfully authenticated with Spotify!")
             try:
                 mlb_walkup_playlist = spotify.user_playlist_create(
                     user=spotify.current_user()["id"],
