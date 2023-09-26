@@ -4,11 +4,11 @@ import os
 import pandas as pd
 import psycopg2
 import streamlit as st
+from streamlit.components.v1 import html
 from st_aggrid import AgGrid, GridOptionsBuilder
-
 import spotipy
 from spotipy.oauth2 import SpotifyOAuth
-
+from oauth import st_oauth, _STKEY
 
 CONNECTION_URI = os.environ.get("CONNECTION_URI")
 SPOTIFY_CLIENT_ID = os.environ.get("SPOTIFY_CLIENT_ID")
@@ -67,6 +67,15 @@ gif.markdown(
     """,
     unsafe_allow_html=True,
 )
+
+config = {
+    "authorization_endpoint": "https://accounts.spotify.com/authorize",
+    "token_endpoint": "https://accounts.spotify.com/api/token",
+    "redirect_uri": "http://localhost:8080/",
+    "client_id": SPOTIFY_CLIENT_ID,
+    "client_secret": SPOTIFY_CLIENT_SECRET,
+    "scope": "playlist-modify-private",
+}
 # Date picker and metrics
 col1, col2, col3, col4, col5 = st.columns([0.2] * 5, gap="large")
 date = col1.date_input(
@@ -136,7 +145,14 @@ else:
     selected_rows = grid["selected_rows"]
     selected_rows_df = pd.DataFrame(selected_rows)
 
-# if st.button("Create Spotify Playlist from Selected Songs"):
+try:
+    st_oauth(config=config, label='Start by Logging into Spotify')
+    spotify = spotipy.Spotify(st.session_state[_STKEY]["access_token"])
+    st.write(f"Authenticated successfully as {spotify.me()['display_name']}")
+except:
+    spotify = None
+    st.error("Unable to authenticate with Spotify.")
+
 with st.form("playlist-form", clear_on_submit=False):
     st.subheader("Create Spotify playlist from selected songs")
     col, buff, buff2 = st.columns([0.2, 0.6, 0.2])
@@ -156,38 +172,9 @@ with st.form("playlist-form", clear_on_submit=False):
             ),
             hide_index=True,
         )
-
-    submit = st.form_submit_button("Create Playlist")
-    if submit:
-        # Check if the user is redirected back to the app after login
-        params = st.experimental_get_query_params()
-        code = params.get("code")
-        spotify = None
-        if code:
-            code = code[0]
-            sp_oauth = SpotifyOAuth(
-                client_id=SPOTIFY_CLIENT_ID,
-                client_secret=SPOTIFY_CLIENT_SECRET,
-                redirect_uri="https://walkup.streamlit.app",
-                cache_path="token.txt",
-                scope="playlist-modify-private",
-            )
-            token_info = sp_oauth.get_access_token(code=code)
-            spotify = spotipy.Spotify(auth=token_info["access_token"])
-            st.write(f"Authenticated successfully as {spotify.me()['display_name']}")
-        else:
-            # User is not authenticated yet. Show the authentication link.
-            sp_oauth = SpotifyOAuth(
-                client_id=SPOTIFY_CLIENT_ID,
-                client_secret=SPOTIFY_CLIENT_SECRET,
-                redirect_uri="https://walkup.streamlit.app",
-                cache_path="token.txt",
-                scope="playlist-modify-private",
-            )
-            auth_url = sp_oauth.get_authorize_url()
-            st.write(f"Please authenticate: [Spotify Login]({auth_url})")
-
-        if spotify:
+    if spotify:
+        submit = st.form_submit_button("Create Playlist", type="primary")
+        if submit:
             try:
                 mlb_walkup_playlist = spotify.user_playlist_create(
                     user=spotify.current_user()["id"],
@@ -214,8 +201,5 @@ with st.form("playlist-form", clear_on_submit=False):
                 st.write(
                     f"Check out your playlist [here]({mlb_walkup_playlist['external_urls']['spotify']})."
                 )
-        else:
-            st.error("Unable to authenticate with Spotify.")
-
-        # Remove the token cache
-        os.remove("token.txt")
+            else:
+                st.error("Unable to authenticate with Spotify.")
