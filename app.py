@@ -1,10 +1,10 @@
 import datetime
 import os
-import webbrowser
 
 import pandas as pd
 import psycopg2
 import streamlit as st
+from streamlit.components.v1 import html
 from st_aggrid import AgGrid, GridOptionsBuilder
 
 import spotipy
@@ -20,6 +20,15 @@ st.set_page_config(
     page_icon="baseball",
     layout="wide",
 )
+
+
+def open_page(url):
+    open_script= """
+        <script type="text/javascript">
+            window.open('%s', '_blank').focus();
+        </script>
+    """ % (url)
+    html(open_script)
 
 
 @st.cache_data()
@@ -174,7 +183,7 @@ with st.form("playlist-form", clear_on_submit=False):
             # User is not authenticated yet. Show the authentication link.
             sp_oauth = SpotifyOAuth(client_id=SPOTIFY_CLIENT_ID, client_secret=SPOTIFY_CLIENT_SECRET, redirect_uri="https://walkup.streamlit.app")
             auth_url = sp_oauth.get_authorize_url()
-            webbrowser.open_new_tab(auth_url)
+            st.button('Open link', on_click=open_page, args=(auth_url,))
 
         if spotify:
             try:
