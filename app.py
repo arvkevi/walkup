@@ -147,7 +147,7 @@ else:
     selected_rows_df = pd.DataFrame(selected_rows)
 
 # if st.button("Create Spotify Playlist from Selected Songs"):
-with st.form("playlist-form", clear_on_submit=False):
+with st.form("playlist-form", clear_on_submit=True):
     st.subheader("Create Spotify playlist from selected songs")
     col, buff, buff2 = st.columns([0.2, 0.6, 0.2])
     playlist_name = col.text_input("Playlist Name", value=f"MLB Walkup Songs {date}")
@@ -184,6 +184,7 @@ with st.form("playlist-form", clear_on_submit=False):
 
     submit = st.form_submit_button("Create Playlist", on_click=open_page, args=(auth_url,))
     if submit:
+
         if spotify:
             try:
                 mlb_walkup_playlist = spotify.user_playlist_create(
