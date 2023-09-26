@@ -167,24 +167,23 @@ with st.form("playlist-form", clear_on_submit=False):
             hide_index=True,
         )
 
-    submit = st.form_submit_button("Create Playlist")
-    if submit:
-        # Check if the user is redirected back to the app after login
-        params = st.experimental_get_query_params()
-        code = params.get("code")
-        spotify = None
-        if code:
-            code = code[0]
-            sp_oauth = SpotifyOAuth(client_id=SPOTIFY_CLIENT_ID, client_secret=SPOTIFY_CLIENT_SECRET, redirect_uri="https://walkup.streamlit.app")
-            token_info = sp_oauth.get_access_token(code=code)
-            spotify = spotipy.Spotify(auth=token_info["access_token"])
-            st.write(f"Authenticated successfully as {spotify.me()['display_name']}")
-        else:
-            # User is not authenticated yet. Show the authentication link.
-            sp_oauth = SpotifyOAuth(client_id=SPOTIFY_CLIENT_ID, client_secret=SPOTIFY_CLIENT_SECRET, redirect_uri="https://walkup.streamlit.app")
-            auth_url = sp_oauth.get_authorize_url()
-            st.button('Open link', on_click=open_page, args=(auth_url,))
+    # Check if the user is redirected back to the app after login
+    params = st.experimental_get_query_params()
+    code = params.get("code")
+    spotify = None
+    if code:
+        code = code[0]
+        sp_oauth = SpotifyOAuth(client_id=SPOTIFY_CLIENT_ID, client_secret=SPOTIFY_CLIENT_SECRET, redirect_uri="https://walkup.streamlit.app")
+        token_info = sp_oauth.get_access_token(code=code)
+        spotify = spotipy.Spotify(auth=token_info["access_token"])
+        st.write(f"Authenticated successfully as {spotify.me()['display_name']}")
+    else:
+        # User is not authenticated yet. Show the authentication link.
+        sp_oauth = SpotifyOAuth(client_id=SPOTIFY_CLIENT_ID, client_secret=SPOTIFY_CLIENT_SECRET, redirect_uri="https://walkup.streamlit.app")
+        auth_url = sp_oauth.get_authorize_url()
 
+    submit = st.form_submit_button("Create Playlist", on_click=open_page, args=(auth_url,))
+    if submit:
         if spotify:
             try:
                 mlb_walkup_playlist = spotify.user_playlist_create(
