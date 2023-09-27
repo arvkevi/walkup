@@ -176,7 +176,6 @@ except:
 
 with st.form("playlist-form", clear_on_submit=False):
     st.subheader("Create Spotify playlist from selected songs")
-    st.image('https://storage.googleapis.com/pr-newsroom-wp/1/2018/11/Spotify_Logo_RGB_Green.png', width=200)
     col, buff, buff2 = st.columns([0.2, 0.6, 0.2])
     playlist_name = col.text_input("Playlist Name", value=f"MLB Walkup Songs {date}", max_chars=25)
 
