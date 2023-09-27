@@ -6,6 +6,7 @@ import psycopg2
 import streamlit as st
 from streamlit.components.v1 import html
 from st_aggrid import AgGrid, GridOptionsBuilder
+from st_aggrid.shared import JsCode
 import spotipy
 from spotipy.oauth2 import SpotifyOAuth
 from oauth import st_oauth, _STKEY
@@ -85,6 +86,7 @@ date = col1.date_input(
 )
 
 data = get_mlb_walkup_data(CONNECTION_URI, date)
+data["spotify_uri"] = data.apply(lambda row: row["spotify_uri"].replace("spotify:track:", "https://open.spotify.com/track/") if row["spotify_uri"] else None, axis=1)
 n_spotify = data["spotify_uri"].notnull().sum()
 data = data[["team", "player", "song_name", "song_artist", "explicit", "spotify_uri"]]
 data.sort_values(by=["team", "player"], inplace=True)
@@ -108,7 +110,7 @@ else:
         rowMultiSelectWithClick=True,
     )
     gb.configure_pagination(paginationAutoPageSize=False, paginationPageSize=10)
-    gb.configure_column(field="spotify_uri", hide=True)
+    # gb.configure_column(field="spotify_uri", hide=True)
     gb.configure_column(field="team", header_name="Team")
     gb.configure_column(field="player", header_name="Player Name")
     gb.configure_column(field="song_name", header_name="Song Name")
@@ -133,6 +135,23 @@ else:
             },
         }
     )
+    gb.configure_column(
+        "spotify_uri", "Spotify Song URL",
+        cellRenderer=JsCode("""
+            class UrlCellRenderer {
+            init(params) {
+                this.eGui = document.createElement('a');
+                this.eGui.innerText = params.value;
+                this.eGui.setAttribute('href', params.value);
+                this.eGui.setAttribute('style', "text-decoration:none");
+                this.eGui.setAttribute('target', "_blank");
+            }
+            getGui() {
+                return this.eGui;
+            }
+            }
+        """)
+    )
     go = gb.build()
 
     grid = AgGrid(
@@ -141,11 +160,13 @@ else:
         fit_columns_on_grid_load=True,
         theme="material",
         key="grid",
+        allow_unsafe_jscode=True,
     )
     selected_rows = grid["selected_rows"]
     selected_rows_df = pd.DataFrame(selected_rows)
 
 try:
+    st.image('https://storage.googleapis.com/pr-newsroom-wp/1/2018/11/Spotify_Logo_RGB_Green.png', width=200)
     st_oauth(config=config, label='Start by Logging into Spotify')
     spotify = spotipy.Spotify(st.session_state[_STKEY]["access_token"])
     st.write(f"Authenticated successfully as {spotify.me()['display_name']}")
@@ -155,8 +176,9 @@ except:
 
 with st.form("playlist-form", clear_on_submit=False):
     st.subheader("Create Spotify playlist from selected songs")
+    st.image('https://storage.googleapis.com/pr-newsroom-wp/1/2018/11/Spotify_Logo_RGB_Green.png', width=200)
     col, buff, buff2 = st.columns([0.2, 0.6, 0.2])
-    playlist_name = col.text_input("Playlist Name", value=f"MLB Walkup Songs {date}")
+    playlist_name = col.text_input("Playlist Name", value=f"MLB Walkup Songs {date}", max_chars=25)
 
     if selected_rows:
         selected_rows_df.drop(columns=["_selectedRowNodeInfo"], inplace=True)
