@@ -6,4 +6,3 @@ requests
 spotipy
 sqlalchemy
 streamlit
-streamlit-aggrid
