@@ -85,6 +85,7 @@ date = col1.date_input(
     "Choose a date :calendar: : ",
     value=datetime.date.today(),
     min_value=datetime.date(2023, 9, 23),
+    max_value=datetime.date.today(),
 )
 
 data = get_mlb_walkup_data(CONNECTION_URI, date)
