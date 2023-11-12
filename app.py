@@ -125,6 +125,8 @@ else:
     edited_df = st.data_editor(data=data, column_config=column_config, hide_index=True, use_container_width=True, num_rows="fixed", disabled=disabled_columns)
     # Extracting selected rows
     selected_rows_df = edited_df[edited_df['Selected']]
+    st.caption("Report issues on [GitHub](https://github.com/arvkevi/walkup/issues)")
+
 try:
     but.image('https://storage.googleapis.com/pr-newsroom-wp/1/2018/11/Spotify_Logo_RGB_Green.png', width=200)
     st_oauth(config=config, label='Start by Logging into Spotify', but=but)
