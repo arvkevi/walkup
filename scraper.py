@@ -76,7 +76,7 @@ if __name__ == "__main__":
                         player_songs[player_name].append(
                             {
                                 "song_name": song,
-                                "artist_name": artist
+                                "song_artist": artist
                             }
                         )
                 
@@ -107,7 +107,7 @@ if __name__ == "__main__":
                     player_songs[player_name].append(
                         {
                             "song_name": song_name,
-                            "artist_name": song_artist
+                            "song_artist": song_artist
                         }
                     )
 
@@ -125,7 +125,7 @@ if __name__ == "__main__":
         for player in team_songs[team]:
             for i, song in enumerate(team_songs[team][player].copy()):
                 song_name = song["song_name"]
-                song_artist = song["artist_name"]
+                song_artist = song["song_artist"]
 
                 if song_name and song_artist:
                     results = spotify_search.search(
@@ -151,7 +151,7 @@ if __name__ == "__main__":
                     'team': team,
                     'player': player,
                     'song_name': song['song_name'],
-                    'artist_name': song['artist_name'],
+                    'song_artist': song['song_artist'],
                     'walkup_date': datetime.date.today(),
                     'spotify_uri': song['spotify_id']['uri'] if song['spotify_id'] else None,
                     'explicit': song['spotify_id']['explicit'] if song['spotify_id'] else None
