@@ -46,39 +46,70 @@ if __name__ == "__main__":
             player_songs = {}
             for player in players:
                 player_name = player.find("div", {"class": "u-text-h4"}).text.strip()
-
+                player_songs[player_name] = []
                 p_tag = player.find("div", {"class": "p-featured-content__text"}).find(
                     ["p", "span"]
                 )
+                spans = p_tag.find_all('span')
 
-                # Initialize an empty string to hold the text from the <p> tag
-                p_text_only = ""
+                songs = set()
+                # Extract song names and artists
+                for span in spans:
+                    text = span.get_text().strip()
+                    if ' by ' in text:
+                        song, artist = text.split(' by ', 1)
+                        songs.add((song.strip(), artist.strip()))
 
-                # Loop through the elements inside the <p> tag
-                for content in p_tag.contents:
-                    if content.name is None:  # Text, not a tag
-                        p_text_only += content
+                if not songs:
+                    for a_tag in p_tag.find_all('a'):
+                        try:
+                            song_name = a_tag.em.get_text().strip()
+                            artist_name = a_tag.next_sibling.strip(' by ')
+                            songs.add((song_name, artist_name))
+                        except:
+                            # use the final method
+                            pass
+                
+                if songs:
+                    # Displaying the results
+                    for song, artist in songs:
+                        player_songs[player_name].append(
+                            {
+                                "song_name": song,
+                                "artist_name": artist
+                            }
+                        )
+                
+                if not songs:
+                    # Additional code to get song name and artist name
+                    p_text_only = ""
 
-                # Remove leading and trailing whitespace
-                p_text_only = p_text_only.strip()
-                em_tag = p_tag.find("em") if p_tag else None
-                i_tag = p_tag.find("i") if p_tag else None
+                    # Loop through the elements inside the <p> tag
+                    for content in p_tag.contents:
+                        if content.name is None:  # Text, not a tag
+                            p_text_only += content
 
-                if em_tag:
-                    song_name = em_tag.text
-                elif i_tag:
-                    song_name = i_tag.text
-                else:
-                    song_name = ""
+                    # Remove leading and trailing whitespace
+                    p_text_only = p_text_only.strip()
+                    em_tag = p_tag.find("em") if p_tag else None
+                    i_tag = p_tag.find("i") if p_tag else None
 
-                song_artist = (
-                    p_tag.text.replace(song_name, "").replace("by", "").strip()
-                )
+                    if em_tag:
+                        song_name = em_tag.text
+                    elif i_tag:
+                        song_name = i_tag.text
+                    else:
+                        song_name = ""
 
-                player_songs[player_name] = {
-                    "song_name": song_name,
-                    "song_artist": song_artist,
-                }
+                    song_artist = (
+                        p_tag.text.replace(song_name, "").replace("by", "").strip()
+                    )
+                    player_songs[player_name].append(
+                        {
+                            "song_name": song_name,
+                            "artist_name": song_artist
+                        }
+                    )
 
             team_songs[team_name] = player_songs
         except Exception as e:
@@ -92,35 +123,43 @@ if __name__ == "__main__":
 
     for team in team_songs:
         for player in team_songs[team]:
-            song_name = team_songs[team][player]["song_name"].strip().replace("\n", " ")
-            song_artist = (
-                team_songs[team][player]["song_artist"].strip().replace("\n", " ")
-            )
-            if song_name and song_artist:
-                results = spotify_search.search(
-                    q=f"track:{song_name} artist:{song_artist}", type="track", limit=1
-                )
-                if results["tracks"]["items"]:
-                    team_songs[team][player]["spotify_id"] = results["tracks"]["items"][
-                        0
-                    ]
+            for i, song in enumerate(team_songs[team][player].copy()):
+                song_name = song["song_name"]
+                song_artist = song["artist_name"]
+
+                if song_name and song_artist:
+                    results = spotify_search.search(
+                        q=f"track:{song_name} artist:{song_artist}", type="track", limit=1
+                    )
+                    if results["tracks"]["items"]:
+                        team_songs[team][player][i]["spotify_id"] = results["tracks"]["items"][0]
+                    else:
+                        team_songs[team][player][i]["spotify_id"] = None
                 else:
-                    team_songs[team][player]["spotify_id"] = None
-            else:
-                team_songs[team][player]["spotify_id"] = None
-            time.sleep(0.2)
+                    team_songs[team][player][i]["spotify_id"] = None
+                time.sleep(0.2)
+    
+    # List to store each record
+    records = []
 
-    df = pd.DataFrame()
-    for team in team_songs:
-        dfteam = pd.DataFrame(team_songs[team]).T.reset_index()
-        dfteam["team"] = team
-        dfteam.rename(columns={"index": "player"}, inplace=True)
-        df = pd.concat([df, dfteam], ignore_index=True, axis=0)
+    # Iterate over the dictionary to create records
+    for team, players in team_songs.items():
+        for player, songs in players.items():
+            for song in songs:
+                # Create a record for each song
+                record = {
+                    'team': team,
+                    'player': player,
+                    'song_name': song['song_name'],
+                    'artist_name': song['artist_name'],
+                    'walkup_date': datetime.date.today(),
+                    'spotify_uri': song['spotify_id']['uri'] if song['spotify_id'] else None,
+                    'explicit': song['spotify_id']['explicit'] if song['spotify_id'] else None
+                }
+                records.append(record)
 
-    df["walkup_date"] = datetime.date.today()
-    df["spotify_uri"] = df["spotify_id"].apply(lambda x: x["uri"] if x else None)
-    df["explicit"] = df["spotify_id"].apply(lambda x: x["explicit"] if x else None)
-    df.drop(columns=["spotify_id"], inplace=True)
+    df = pd.DataFrame(records)
+
     engine = create_engine(CONNECTION_URI.replace("postgresql", "postgresql+psycopg2"))
     df.to_sql('mlb_walk_up_songs', engine, if_exists='append', index=False)
 
