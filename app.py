@@ -99,6 +99,7 @@ col2.metric("Songs", data["song_name"].nunique())
 col3.metric("Songs in Spotify", n_spotify)
 col4.metric("Players", data["player"].nunique())
 col5.metric("Teams", data["team"].nunique())
+select_all = col1.checkbox("Select all", value=False)
 filter_explicit = col4.checkbox("No explicit songs?", value=False)
 filter_in_spotify = col5.checkbox("Only songs in Spotify?", value=False)
 
@@ -122,6 +123,8 @@ else:
         data = data[data["explicit"] == False]
     if filter_in_spotify:
         data = data[data["spotify_uri"].notnull()]
+    if select_all:
+        data["Selected"] = [True] * data.shape[0]
     edited_df = st.data_editor(data=data, column_config=column_config, hide_index=True, use_container_width=True, num_rows="fixed", disabled=disabled_columns)
     # Extracting selected rows
     selected_rows_df = edited_df[edited_df['Selected']]
