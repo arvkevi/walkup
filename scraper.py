@@ -13,6 +13,9 @@ from sqlalchemy import create_engine
 import time
 import sys
 import re
+from pytz import timezone
+
+EST = timezone("US/Eastern")
 
 if __name__ == "__main__":
     
@@ -192,7 +195,7 @@ if __name__ == "__main__":
                     'player': player,
                     'song_name': song['song_name'],
                     'song_artist': song['song_artist'],
-                    'walkup_date': datetime.date.today(),
+                    'walkup_date': datetime.datetime.now(EST).date(),
                     'spotify_uri': song['spotify_id']['uri'] if song['spotify_id'] else None,
                     'explicit': song['spotify_id']['explicit'] if song['spotify_id'] else None
                 }
