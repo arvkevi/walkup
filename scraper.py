@@ -148,6 +148,9 @@ if __name__ == "__main__":
                         song_name = song.find("div", {"class": "player-walkup-music__song--content--songname"}).get_text()
                         artist_name = song.find("div", {"class": "player-walkup-music__song--content--artistname"}).get_text()
                         player_songs[player_name].append({"song_name": song_name, "artist_name": artist_name})
+
+                team_songs[team_name] = player_songs
+
             except Exception as e:
                 print(f"{team_name}: Error, skipping...")
 
