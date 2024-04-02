@@ -12,6 +12,7 @@ from sqlalchemy import create_engine
 
 import time
 import sys
+import re
 
 if __name__ == "__main__":
     
@@ -112,8 +113,44 @@ if __name__ == "__main__":
                     )
 
             team_songs[team_name] = player_songs
+
         except Exception as e:
-            print(f"Error with {team_name}: {e}")
+            print(f"{team_name}: trying another method...")
+
+        if team_name not in team_songs:
+            try:
+                song_table = bsteam.find("div", {"data-testid": "player-walkup-music"})
+
+                table = song_table.find("table")
+                for i, rows in enumerate(table):
+                    # table header
+                    if i == 0:
+                        continue
+
+                # Find all player entries
+                player_entries = rows.find_all("tr", {"data-selected": "false", "data-underlined": "false"})
+
+                # Initialize a dictionary to hold player names and their unique songs
+                player_songs = {}
+
+                for entry in player_entries:
+                    # Extract the player name
+                    player_first_name = entry.find("div", {"data-testid": re.compile(r"spot-tag__super-name")})
+                    player_last_name = entry.find("div", {"data-testid": re.compile(r"spot-tag__name")})
+                    player_first_name = " ".join(tag.get_text() for tag in player_first_name)
+                    player_last_name = " ".join(tag.get_text() for tag in player_last_name)
+                    player_name = f"{player_first_name} {player_last_name}"
+
+                    # Find all songs for this player
+                    player_songs[player_name] = []
+                    songs = entry.find_all("div", {"data-testid": re.compile(r"player-walkup-music-song-content-\d+")})
+                    for song in songs:
+                        song_name = song.find("div", {"class": "player-walkup-music__song--content--songname"}).get_text()
+                        artist_name = song.find("div", {"class": "player-walkup-music__song--content--artistname"}).get_text()
+                        player_songs[player_name].append({"song_name": song_name, "artist_name": artist_name})
+            except Exception as e:
+                print(f"{team_name}: Error, skipping...")
+
 
     spotify_search = spotipy.Spotify(
         client_credentials_manager=SpotifyClientCredentials(

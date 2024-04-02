@@ -6,6 +6,7 @@ import psycopg2
 import streamlit as st
 from streamlit.components.v1 import html
 import spotipy
+from pytz import timezone
 from spotipy.oauth2 import SpotifyOAuth
 from oauth import st_oauth, _STKEY
 
@@ -13,6 +14,7 @@ CONNECTION_URI = os.environ.get("CONNECTION_URI")
 SPOTIFY_CLIENT_ID = os.environ.get("SPOTIFY_CLIENT_ID")
 SPOTIFY_CLIENT_SECRET = os.environ.get("SPOTIFY_CLIENT_SECRET")
 REDIRECT_URI = os.environ.get("REDIRECT_URI")
+EST = timezone("US/Eastern")
 
 st.set_page_config(
     page_title="MLB Walkup Songs to Spotify Playlist",
@@ -83,9 +85,9 @@ gif.markdown(
 col1, col2, col3, col4, col5 = st.columns([0.2] * 5, gap="large")
 date = col1.date_input(
     "Choose a date :calendar: : ",
-    value=datetime.date.today(),
+    value=datetime.datetime.now(EST).date(),
     min_value=datetime.date(2023, 9, 23),
-    max_value=datetime.date.today(),
+    max_value=datetime.datetime.now(EST).date(),
 )
 
 data = get_mlb_walkup_data(CONNECTION_URI, date)
