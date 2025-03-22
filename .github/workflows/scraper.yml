@@ -83,32 +83,42 @@ jobs:
                   print(f'DNS resolution failed: {str(e)}')
                   return False
               
-              # Test TCP connection
+              # Test TCP connection with longer timeout
               try:
                   print(f'Testing TCP connection to {ip}:{port}...')
                   sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                  sock.settimeout(10)
+                  sock.settimeout(30)  # Increased timeout to 30 seconds
                   sock.connect((ip, port))
                   sock.close()
                   print('TCP connection successful')
               except socket.timeout:
-                  print('TCP connection timed out')
+                  print('TCP connection timed out - Check if:')
+                  print('1. RDS security group allows inbound traffic on port 5432')
+                  print('2. RDS instance is in the same VPC as the VPC Endpoint')
+                  print('3. RDS instance is running and accessible')
                   return False
               except ConnectionRefusedError:
-                  print('Connection refused - port might be closed')
+                  print('Connection refused - port might be closed or RDS instance not running')
                   return False
               except Exception as e:
                   print(f'TCP connection failed: {str(e)}')
                   return False
               
-              # Now try PostgreSQL connection
+              # Now try PostgreSQL connection with longer timeout
               conn_str = f'host={host} port={port} dbname={dbname} user={user} password={password}'
               max_attempts = 3
               
               for attempt in range(max_attempts):
                   try:
                       print(f'Attempt {attempt + 1} to connect to database...')
-                      conn = psycopg2.connect(conn_str, connect_timeout=30)
+                      conn = psycopg2.connect(
+                          conn_str,
+                          connect_timeout=30,  # Increased timeout to 30 seconds
+                          keepalives=1,  # Enable TCP keepalive
+                          keepalives_idle=30,  # Send keepalive every 30 seconds
+                          keepalives_interval=10,  # Retry keepalive every 10 seconds
+                          keepalives_count=5  # Retry 5 times before giving up
+                      )
                       conn.close()
                       print('Database connection successful!')
                       return True
