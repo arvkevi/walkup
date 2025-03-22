@@ -9,6 +9,7 @@ import time
 import sys
 import re
 from pytz import timezone
+import backoff  # For retrying failed operations
 
 EST = timezone("US/Eastern")
 
@@ -69,6 +70,7 @@ def get_team_links():
         return []
 
 
+@backoff.on_exception(backoff.expo, Exception, max_tries=5)
 def scrape_and_store(
     connection_uri, spotify_client_id, spotify_client_secret, dry_run=False
 ):
@@ -97,6 +99,7 @@ def scrape_and_store(
         sys.exit(1)
 
     team_songs = {}
+    total_songs_found = 0
     for team_link in team_links:
         team_name = team_link.split("/")[-3]
         sys.stdout.write(f"\nProcessing team: {team_name}\n")
@@ -259,6 +262,7 @@ def scrape_and_store(
             if player_songs:
                 team_songs[team_name] = player_songs
                 sys.stdout.write(f"Found {len(player_songs)} players for {team_name}\n")
+                total_songs_found += len(player_songs)
             else:
                 sys.stdout.write(f"No songs found for {team_name}\n")
 
@@ -283,86 +287,85 @@ def scrape_and_store(
             )
         )
 
-    # Search for songs on Spotify
-    if spotify_search:
-        for team, players in team_songs.items():
-            for player, songs in players.items():
-                for i, song in enumerate(songs):
-                    song_name = song["song_name"]
-                    song_artist = song["song_artist"]
-
-                    if song_name and song_artist:
+    # Search for songs on Spotify and prepare records
+    records = []
+    for team, players in team_songs.items():
+        sys.stdout.write(f"\nProcessing Spotify data for team: {team}\n")
+        for player, songs in players.items():
+            for song in songs:
+                try:
+                    spotify_data = None
+                    if spotify_search and song["song_name"] and song["song_artist"]:
                         try:
                             results = spotify_search.search(
-                                q=f"track:{song_name} artist:{song_artist}",
+                                q=f"track:{song['song_name']} artist:{song['song_artist']}",
                                 type="track",
                                 limit=1,
                             )
                             if results["tracks"]["items"]:
-                                team_songs[team][player][i]["spotify_id"] = results[
-                                    "tracks"
-                                ]["items"][0]
-                            else:
-                                team_songs[team][player][i]["spotify_id"] = None
+                                spotify_data = results["tracks"]["items"][0]
                         except Exception as e:
-                            sys.stdout.write(f"Spotify search error: {str(e)}\n")
-                            team_songs[team][player][i]["spotify_id"] = None
-                    else:
-                        team_songs[team][player][i]["spotify_id"] = None
-                    time.sleep(0.2)  # Rate limiting
+                            sys.stdout.write(
+                                f"Spotify search error for {player}: {e}\n"
+                            )
+                            time.sleep(0.2)  # Rate limiting
+                            continue
 
-    # Prepare records for database
-    records = []
-    for team, players in team_songs.items():
-        for player, songs in players.items():
-            for song in songs:
-                record = {
-                    "team": team,
-                    "player": player,
-                    "song_name": song["song_name"],
-                    "song_artist": song["song_artist"],
-                    "walkup_date": datetime.datetime.now(EST).date(),
-                    "spotify_uri": (
-                        song["spotify_id"]["uri"] if song["spotify_id"] else None
-                    ),
-                    "explicit": (
-                        song["spotify_id"]["explicit"] if song["spotify_id"] else None
-                    ),
-                }
-                records.append(record)
+                    record = {
+                        "team": team,
+                        "player": player,
+                        "song_name": song["song_name"],
+                        "song_artist": song["song_artist"],
+                        "walkup_date": datetime.datetime.now(EST).date(),
+                        "spotify_uri": spotify_data["uri"] if spotify_data else None,
+                        "explicit": spotify_data["explicit"] if spotify_data else None,
+                    }
+                    records.append(record)
+                    sys.stdout.write(
+                        f"Added record for {player}: {song['song_name']}\n"
+                    )
+                except Exception as e:
+                    sys.stdout.write(f"Error creating record for {player}: {e}\n")
+                    continue
 
     if not records:
         sys.stdout.write("No records to store. Exiting.\n")
         sys.exit(1)
 
+    sys.stdout.write(f"\nPrepared {len(records)} records for storage\n")
+
     # Create DataFrame
     df = pd.DataFrame(records)
-    sys.stdout.write(f"Attempting to store {len(records)} records...\n")
 
     try:
         # Configure database engine with longer timeouts and retry logic
         engine = create_engine(
             connection_uri.replace("postgresql://", "postgresql+psycopg2://"),
             connect_args={
-                "connect_timeout": 60,
+                "connect_timeout": 120,  # Increased timeout
                 "keepalives": 1,
                 "keepalives_idle": 30,
                 "keepalives_interval": 10,
                 "keepalives_count": 5,
+                "tcp_user_timeout": 60000,  # 60 seconds in milliseconds
+                "options": "-c statement_timeout=60000",  # 60 seconds
             },
             pool_pre_ping=True,
             pool_recycle=3600,
-            pool_timeout=30,
+            pool_timeout=60,
+            max_overflow=10,
+            pool_size=5,
         )
 
         # Store records with chunking for better performance
+        sys.stdout.write("Storing records in database...\n")
         df.to_sql(
             "mlb_walk_up_songs",
             engine,
             if_exists="append",
             index=False,
             method="multi",
-            chunksize=100,
+            chunksize=50,  # Smaller chunks for better reliability
         )
 
         sys.stdout.write(
