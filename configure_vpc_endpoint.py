@@ -1,7 +1,7 @@
 import os
 import sys
 import boto3
-from botocore.exceptions import ClientError
+from botocore.exceptions import ClientError, WaiterError
 
 
 def get_vpc_id():
@@ -127,9 +127,17 @@ def configure_vpc_endpoint():
 
             # Wait for endpoint to be available
             print("Waiting for VPC Endpoint to be available...")
-            waiter = ec2.get_waiter("vpc_endpoint_available")
-            waiter.wait(VpcEndpointIds=[endpoint_id])
-            print("VPC Endpoint is now available")
+            try:
+                waiter = ec2.get_waiter("vpc_endpoint_exists")
+                waiter.wait(
+                    VpcEndpointIds=[endpoint_id],
+                    Filters=[{"Name": "state", "Values": ["available"]}],
+                    WaiterConfig={"Delay": 5, "MaxAttempts": 60},  # 5 minutes max
+                )
+                print("VPC Endpoint is now available")
+            except WaiterError as e:
+                print(f"Timeout waiting for VPC Endpoint: {e}")
+                return False
 
             return True
 
