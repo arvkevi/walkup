@@ -1,6 +1,7 @@
 import os
 import sys
 import boto3
+import time
 from botocore.exceptions import ClientError
 
 
@@ -15,6 +16,51 @@ def get_vpc_id():
     except:
         # If we're not in an EC2 instance, use the VPC ID from environment
         return os.environ.get("VPC_ID")
+
+
+def create_security_group(ec2, vpc_id):
+    """Create a security group for the VPC Endpoint."""
+    try:
+        sg_name = "github-actions-rds-endpoint-sg"
+        sg_desc = "Security group for GitHub Actions RDS VPC Endpoint"
+
+        # Check if security group already exists
+        existing_sgs = ec2.describe_security_groups(
+            Filters=[
+                {"Name": "group-name", "Values": [sg_name]},
+                {"Name": "vpc-id", "Values": [vpc_id]},
+            ]
+        )["SecurityGroups"]
+
+        if existing_sgs:
+            print(f"Security group {sg_name} already exists")
+            return existing_sgs[0]["GroupId"]
+
+        # Create new security group
+        response = ec2.create_security_group(
+            GroupName=sg_name, Description=sg_desc, VpcId=vpc_id
+        )
+        sg_id = response["GroupId"]
+
+        # Add inbound rule for PostgreSQL
+        ec2.authorize_security_group_ingress(
+            GroupId=sg_id,
+            IpPermissions=[
+                {
+                    "IpProtocol": "tcp",
+                    "FromPort": 5432,
+                    "ToPort": 5432,
+                    "IpRanges": [{"CidrIp": "0.0.0.0/0"}],
+                }
+            ],
+        )
+
+        print(f"Created security group {sg_name} with ID {sg_id}")
+        return sg_id
+
+    except ClientError as e:
+        print(f"Error creating security group: {e}")
+        return None
 
 
 def configure_vpc_endpoint():
@@ -48,6 +94,11 @@ def configure_vpc_endpoint():
         subnet_id = subnets[0]["SubnetId"]
         print(f"Using subnet: {subnet_id}")
 
+        # Create security group
+        sg_id = create_security_group(ec2, vpc_id)
+        if not sg_id:
+            return False
+
         # Check if endpoint already exists
         existing_endpoints = ec2.describe_vpc_endpoints(
             Filters=[
@@ -69,6 +120,7 @@ def configure_vpc_endpoint():
                 VpcId=vpc_id,
                 ServiceName=f"com.amazonaws.{os.environ['AWS_REGION']}.rds",
                 SubnetIds=[subnet_id],
+                SecurityGroupIds=[sg_id],
                 VpcEndpointType="Interface",
                 TagSpecifications=[
                     {
@@ -80,8 +132,17 @@ def configure_vpc_endpoint():
                     }
                 ],
             )
-            print(f"Created VPC Endpoint: {response['VpcEndpoint']['VpcEndpointId']}")
+            endpoint_id = response["VpcEndpoint"]["VpcEndpointId"]
+            print(f"Created VPC Endpoint: {endpoint_id}")
+
+            # Wait for endpoint to be available
+            print("Waiting for VPC Endpoint to be available...")
+            waiter = ec2.get_waiter("vpc_endpoint_available")
+            waiter.wait(VpcEndpointIds=[endpoint_id])
+            print("VPC Endpoint is now available")
+
             return True
+
         except ClientError as e:
             print(f"Error creating VPC Endpoint: {e}")
             return False

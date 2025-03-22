@@ -63,24 +63,65 @@ jobs:
           import psycopg2
           import sys
           import time
+          import socket
           from urllib.parse import urlparse
 
           def test_connection(uri):
               parsed = urlparse(uri)
-              conn_str = f'host={parsed.hostname} port={parsed.port or 5432} dbname={parsed.path[1:]} user={parsed.username} password={parsed.password}'
+              host = parsed.hostname
+              port = parsed.port or 5432
+              dbname = parsed.path[1:]
+              user = parsed.username
+              password = parsed.password
+              
+              # First test DNS resolution
+              try:
+                  print(f'Resolving DNS for {host}...')
+                  ip = socket.gethostbyname(host)
+                  print(f'Resolved to IP: {ip}')
+              except socket.gaierror as e:
+                  print(f'DNS resolution failed: {str(e)}')
+                  return False
+              
+              # Test TCP connection
+              try:
+                  print(f'Testing TCP connection to {ip}:{port}...')
+                  sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                  sock.settimeout(10)
+                  sock.connect((ip, port))
+                  sock.close()
+                  print('TCP connection successful')
+              except socket.timeout:
+                  print('TCP connection timed out')
+                  return False
+              except ConnectionRefusedError:
+                  print('Connection refused - port might be closed')
+                  return False
+              except Exception as e:
+                  print(f'TCP connection failed: {str(e)}')
+                  return False
+              
+              # Now try PostgreSQL connection
+              conn_str = f'host={host} port={port} dbname={dbname} user={user} password={password}'
               max_attempts = 3
               
               for attempt in range(max_attempts):
                   try:
                       print(f'Attempt {attempt + 1} to connect to database...')
-                      conn = psycopg2.connect(conn_str, connect_timeout=10)
+                      conn = psycopg2.connect(conn_str, connect_timeout=30)
                       conn.close()
                       print('Database connection successful!')
                       return True
-                  except Exception as e:
-                      print(f'Connection attempt {attempt + 1} failed: {str(e)}')
+                  except psycopg2.OperationalError as e:
+                      print(f'Database connection attempt {attempt + 1} failed: {str(e)}')
                       if attempt < max_attempts - 1:
-                          time.sleep(10)
+                          print('Waiting 30 seconds before next attempt...')
+                          time.sleep(30)
+                  except Exception as e:
+                      print(f'Unexpected error during connection attempt {attempt + 1}: {str(e)}')
+                      if attempt < max_attempts - 1:
+                          print('Waiting 30 seconds before next attempt...')
+                          time.sleep(30)
               return False
 
           success = test_connection('${{ secrets.CONNECTION_URI }}')
@@ -88,6 +129,7 @@ jobs:
           "
         env:
           PYTHONUNBUFFERED: 1
+          REQUESTS_CA_BUNDLE: /etc/ssl/certs/ca-certificates.crt
 
       - name: Scrape walkups
         run: |
