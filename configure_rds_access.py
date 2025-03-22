@@ -1,24 +1,24 @@
 import os
 import sys
-import json
 import requests
 import boto3
 from botocore.exceptions import ClientError
 
 
-def get_github_actions_ip_ranges():
-    """Get GitHub Actions IP ranges."""
+def get_runner_ip():
+    """Get the current runner's IP address."""
     try:
-        response = requests.get("https://api.github.com/meta")
+        # Use ipify.org to get the public IP
+        response = requests.get("https://api.ipify.org")
         response.raise_for_status()
-        return response.json().get("actions", [])
+        return response.text.strip()
     except Exception as e:
-        print(f"Error fetching GitHub Actions IP ranges: {e}")
-        return []
+        print(f"Error getting runner IP: {e}")
+        return None
 
 
 def configure_rds_security():
-    """Configure RDS security group for GitHub Actions."""
+    """Configure RDS security group for GitHub Actions runner."""
     try:
         # Create EC2 client
         ec2 = boto3.client(
@@ -35,44 +35,52 @@ def configure_rds_security():
         existing_rules = response["SecurityGroups"][0]["IpPermissions"]
 
         # Remove existing PostgreSQL rules
-        for rule in existing_rules:
-            if rule.get("FromPort") == 5432 and rule.get("ToPort") == 5432:
-                try:
-                    ec2.revoke_security_group_ingress(
-                        GroupId=security_group_id, IpPermissions=[rule]
-                    )
-                except ClientError as e:
-                    if e.response["Error"]["Code"] != "InvalidPermission.NotFound":
-                        raise
-
-        # Get GitHub Actions IP ranges
-        ip_ranges = get_github_actions_ip_ranges()
-        if not ip_ranges:
-            print("No GitHub Actions IP ranges found")
-            sys.exit(1)
-
-        # Add rules for GitHub Actions IPs
-        for i in range(0, len(ip_ranges), 50):  # Process in batches of 50
-            batch = ip_ranges[i : i + 50]
+        postgres_rules = [
+            rule
+            for rule in existing_rules
+            if rule.get("FromPort") == 5432 and rule.get("ToPort") == 5432
+        ]
+        if postgres_rules:
+            print("Removing existing PostgreSQL rules...")
             try:
-                ec2.authorize_security_group_ingress(
-                    GroupId=security_group_id,
-                    IpPermissions=[
-                        {
-                            "FromPort": 5432,
-                            "ToPort": 5432,
-                            "IpProtocol": "tcp",
-                            "IpRanges": [{"CidrIp": ip} for ip in batch],
-                        }
-                    ],
+                ec2.revoke_security_group_ingress(
+                    GroupId=security_group_id, IpPermissions=postgres_rules
                 )
-                print(f"Added rules for IPs {i+1} to {i+len(batch)}")
+                print("Successfully removed existing rules")
             except ClientError as e:
-                if e.response["Error"]["Code"] != "InvalidPermission.Duplicate":
-                    raise
+                if e.response["Error"]["Code"] != "InvalidPermission.NotFound":
+                    print(f"Error removing existing rules: {e}")
+                    return False
 
-        print("Successfully configured security group")
-        return True
+        # Get runner's IP
+        runner_ip = get_runner_ip()
+        if not runner_ip:
+            print("Could not determine runner IP address")
+            return False
+
+        print(f"Adding rule for runner IP: {runner_ip}")
+
+        # Add rule for runner's IP
+        try:
+            ec2.authorize_security_group_ingress(
+                GroupId=security_group_id,
+                IpPermissions=[
+                    {
+                        "FromPort": 5432,
+                        "ToPort": 5432,
+                        "IpProtocol": "tcp",
+                        "IpRanges": [{"CidrIp": f"{runner_ip}/32"}],
+                    }
+                ],
+            )
+            print("Successfully added rule for runner IP")
+            return True
+        except ClientError as e:
+            if e.response["Error"]["Code"] == "InvalidPermission.Duplicate":
+                print("Rule already exists for this IP")
+                return True
+            print(f"Error adding rule: {e}")
+            return False
 
     except Exception as e:
         print(f"Error configuring security group: {e}")
