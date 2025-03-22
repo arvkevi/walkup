@@ -116,6 +116,70 @@ def scrape_and_store(connection_uri, spotify_client_id, spotify_client_secret):
                             )
                             continue
 
+            # If still no songs found, try the third method (legacy structure)
+            if not any(songs for songs in player_songs.values()):
+                forge_list = bsteam.find("div", {"class": "p-forge-list"})
+                if forge_list:
+                    for player in forge_list.find_all(
+                        "div", {"class": "p-featured-content__body"}
+                    ):
+                        try:
+                            name_elem = player.find("div", {"class": "u-text-h4"})
+                            if not name_elem:
+                                continue
+
+                            player_name = name_elem.text.strip()
+                            player_songs[player_name] = []
+
+                            content = player.find(
+                                "div", {"class": "p-featured-content__text"}
+                            )
+                            if not content:
+                                continue
+
+                            text_elem = content.find(["p", "span"])
+                            if not text_elem:
+                                continue
+
+                            # Try to find song info in spans
+                            spans = text_elem.find_all("span")
+                            songs_found = False
+
+                            for span in spans:
+                                span_text = span.text.strip()
+                                if " by " in span_text:
+                                    song_name, artist = span_text.split(" by ", 1)
+                                    player_songs[player_name].append(
+                                        {
+                                            "song_name": song_name.strip(),
+                                            "song_artist": artist.strip(),
+                                        }
+                                    )
+                                    songs_found = True
+
+                            # If no songs found in spans, try other methods
+                            if not songs_found:
+                                # Try finding song in em/i tags
+                                song_tag = text_elem.find(["em", "i"])
+                                if song_tag:
+                                    song_name = song_tag.text.strip()
+                                    # Artist might be after the song
+                                    text_parts = text_elem.text.split("by")
+                                    if len(text_parts) > 1:
+                                        artist = text_parts[1].strip()
+                                        player_songs[player_name].append(
+                                            {
+                                                "song_name": song_name,
+                                                "song_artist": artist,
+                                            }
+                                        )
+
+                        except Exception as e:
+                            sys.stdout.write(
+                                f"Error processing legacy player in {team_name}: {str(e)}\n"
+                            )
+                            continue
+
             if player_songs:
                 team_songs[team_name] = player_songs
                 sys.stdout.write(
@@ -139,8 +203,8 @@ def scrape_and_store(connection_uri, spotify_client_id, spotify_client_secret):
     )
 
     # Search for songs on Spotify
-    for team in team_songs:
-        for player in team_songs[team]:
+    for team, players in team_songs.items():
+        for player, songs in players.items():
             for i, song in enumerate(team_songs[team][player].copy()):
                 song_name = song["song_name"]
                 song_artist = song["song_artist"]
@@ -194,6 +258,17 @@ def scrape_and_store(connection_uri, spotify_client_id, spotify_client_secret):
     sys.stdout.write(f"Attempting to store {len(records)} records...\n")
 
     try:
+        # Test connection first
+        sys.stdout.write("Testing database connection...\n")
+        test_engine = create_engine(
+            connection_uri.replace("postgresql://", "postgresql+psycopg2://"),
+            connect_args={"connect_timeout": 10},
+        )
+        with test_engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+            sys.stdout.write("Database connection test successful\n")
+
+        # Create actual engine with optimized settings
         engine = create_engine(
             connection_uri.replace("postgresql://", "postgresql+psycopg2://"),
             connect_args={
@@ -205,11 +280,55 @@ def scrape_and_store(connection_uri, spotify_client_id, spotify_client_secret):
             },
         )
 
-        # Test connection first
-        with engine.connect() as conn:
-            conn.execute(text("SELECT 1"))
-            sys.stdout.write("Database connection test successful\n")
+        # Get today's date in EST
+        today = datetime.datetime.now(EST).date()
 
+        # Check for existing records for today
+        with engine.connect() as conn:
+            existing_records = pd.read_sql(
+                text(
+                    """
+                    SELECT team, player, song_name, song_artist
+                    FROM mlb_walk_up_songs
+                    WHERE walkup_date = :today
+                    """
+                ),
+                conn,
+                params={"today": today},
+            )
+
+        if not existing_records.empty:
+            # Create a set of existing records for faster lookup
+            existing_set = {
+                (row["team"], row["player"], row["song_name"], row["song_artist"])
+                for _, row in existing_records.iterrows()
+            }
+
+            # Filter out duplicates
+            new_records = []
+            for _, row in df.iterrows():
+                record_key = (
+                    row["team"],
+                    row["player"],
+                    row["song_name"],
+                    row["song_artist"],
+                )
+                if record_key not in existing_set:
+                    new_records.append(row)
+
+            if not new_records:
+                sys.stdout.write(
+                    "No new records to store. All records already exist.\n"
+                )
+                sys.exit(0)
+
+            df = pd.DataFrame(new_records)
+            sys.stdout.write(
+                f"Found {len(records) - len(new_records)} duplicate records. "
+                f"Storing {len(new_records)} new records...\n"
+            )
+
+        # Store new records
         df.to_sql(
             "mlb_walk_up_songs",
             engine,
@@ -219,7 +338,7 @@ def scrape_and_store(connection_uri, spotify_client_id, spotify_client_secret):
             chunksize=100,  # Insert in chunks
         )
         sys.stdout.write(
-            f"Successfully stored {len(records)} records\n"
+            f"Successfully stored {len(df)} records\n"
             f"({df.loc[df['spotify_uri'].notnull()].shape[0]} with Spotify URIs)\n"
         )
     except Exception as e:
