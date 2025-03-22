@@ -29,6 +29,7 @@ def get_proxy_endpoint():
         print(f"Error getting proxy endpoint: {e}")
         return None
 
+
 def get_proxy_connection_string():
     """Get database connection string using IAM authentication."""
     try:
@@ -57,11 +58,14 @@ def get_proxy_connection_string():
             f"{proxy_endpoint}:5432/{db_name}"
         )
 
-        print("\nRDS Proxy connection string (valid for 15 minutes):")
-        print(f"postgresql://{parsed.username}:****@{proxy_endpoint}:5432/{db_name}")
-        print("\nTo use this connection string:")
-        print("1. Set the PGPASSWORD environment variable to the auth token")
-        print("2. Use psql or your application to connect\n")
+        # Print connection string with masked credentials for logs
+        masked_uri = (
+            f"postgresql://{parsed.username}:****@" f"{proxy_endpoint}:5432/{db_name}"
+        )
+        print(f"Generated proxy connection string: {masked_uri}")
+
+        # Print just the connection string for GitHub Actions to capture
+        print(proxy_uri)
 
         return proxy_uri
 

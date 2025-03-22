@@ -42,8 +42,8 @@ jobs:
         id: get_proxy
         run: |
           echo "Getting RDS Proxy connection..."
-          PROXY_URI=$(python get_proxy_connection.py)
-          echo "proxy_uri=${PROXY_URI}" >> $GITHUB_OUTPUT
+          PROXY_URI=$(python get_proxy_connection.py | tail -n 1)
+          echo "proxy_uri=$PROXY_URI" >> "$GITHUB_OUTPUT"
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
