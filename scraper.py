@@ -12,33 +12,72 @@ from pytz import timezone
 
 EST = timezone("US/Eastern")
 
+# List of MLB team names and their corresponding URLs
+MLB_TEAMS = {
+    "orioles": "orioles",
+    "redsox": "redsox",
+    "yankees": "yankees",
+    "rays": "rays",
+    "bluejays": "bluejays",
+    "whitesox": "whitesox",
+    "guardians": "guardians",
+    "tigers": "tigers",
+    "royals": "royals",
+    "twins": "twins",
+    "athletics": "athletics",
+    "astros": "astros",
+    "angels": "angels",
+    "mariners": "mariners",
+    "rangers": "rangers",
+    "braves": "braves",
+    "marlins": "marlins",
+    "mets": "mets",
+    "phillies": "phillies",
+    "nationals": "nationals",
+    "reds": "reds",
+    "brewers": "brewers",
+    "pirates": "pirates",
+    "cardinals": "cardinals",
+    "dbacks": "dbacks",
+    "rockies": "rockies",
+    "dodgers": "dodgers",
+    "padres": "padres",
+    "giants": "giants",
+}
+
 
 def get_team_links():
     """Get all MLB team links."""
     try:
         mlb_site = "https://www.mlb.com"
-        response = requests.get(f"{mlb_site}/team", timeout=30)
-        response.raise_for_status()
-        bs = BeautifulSoup(response.text, "html.parser")
-
         team_links = []
-        for link in bs.find_all("a", href=re.compile(r"/[a-z-]+/roster")):
-            team_path = link["href"].split("/roster")[0]
-            if team_path and not team_path.endswith(("milb", "teams")):
-                team_links.append(f"{mlb_site}{team_path}/ballpark/music")
 
+        # Generate links for all teams
+        for team_name in MLB_TEAMS.values():
+            music_url = f"{mlb_site}/{team_name}/ballpark/music"
+            team_links.append(music_url)
+            sys.stdout.write(f"Found team link: {music_url}\n")
+
+        if not team_links:
+            sys.stdout.write("No team links found. Exiting.\n")
+            return []
+
+        sys.stdout.write(f"Found {len(team_links)} team links\n")
         return team_links
     except Exception as e:
         sys.stdout.write(f"Error getting team links: {str(e)}\n")
         return []
 
 
-def scrape_and_store(connection_uri, spotify_client_id, spotify_client_secret):
+def scrape_and_store(
+    connection_uri, spotify_client_id, spotify_client_secret, dry_run=False
+):
     """Scrape MLB walk-up songs and store them in the database."""
     sys.stdout.write(
         f"Scraping MLB walk-up songs...\n"
         f"Spotify Client ID is None: {spotify_client_id is None}\n"
         f"Spotify Client Secret is None: {spotify_client_secret is None}\n"
+        f"Dry run mode: {dry_run}\n"
     )
 
     team_links = get_team_links()
@@ -49,134 +88,149 @@ def scrape_and_store(connection_uri, spotify_client_id, spotify_client_secret):
     team_songs = {}
     for team_link in team_links:
         team_name = team_link.split("/")[-3]
+        sys.stdout.write(f"\nProcessing team: {team_name}\n")
+        sys.stdout.write(f"URL: {team_link}\n")
         try:
             response = requests.get(team_link, timeout=30)
             response.raise_for_status()
             bsteam = BeautifulSoup(response.text, "html.parser")
 
-            # Try the first method (new website structure)
+            # Debug output for page structure
+            sys.stdout.write("Page structure:\n")
+
+            # Initialize player songs dictionary
             player_songs = {}
+            songs_found = False
+
+            # Method 1: Try finding a dedicated music/walkup section
             music_section = bsteam.find(
-                "section", {"class": re.compile(r".*music.*", re.I)}
+                ["section", "div"], {"class": re.compile(r".*(music|walkup).*", re.I)}
             )
             if music_section:
-                for player_div in music_section.find_all(
-                    "div", {"class": re.compile(r".*player.*", re.I)}
-                ):
+                sys.stdout.write("- Found music/walkup section\n")
+                # Look for player entries in various formats
+                player_entries = music_section.find_all(
+                    ["div", "article"],
+                    {"class": re.compile(r".*(player|entry).*", re.I)},
+                )
+
+                if not player_entries:
+                    # Try finding a table structure within the music section
+                    player_entries = music_section.find_all("tr")
+
+                for entry in player_entries:
                     try:
-                        name_elem = player_div.find(
-                            ["h2", "h3", "h4"], {"class": re.compile(r".*name.*", re.I)}
+                        # Try to find player name in various formats
+                        name_elem = entry.find(
+                            ["h2", "h3", "h4", "td", "div"],
+                            {"class": re.compile(r".*(name|player).*", re.I)},
                         )
                         if not name_elem:
-                            continue
+                            name_elem = entry.find(["h2", "h3", "h4", "td", "div"])
 
-                        player_name = name_elem.text.strip()
-                        player_songs[player_name] = []
-
-                        song_elems = player_div.find_all(
-                            ["p", "div"], {"class": re.compile(r".*song.*", re.I)}
-                        )
-                        for song_elem in song_elems:
-                            song_text = song_elem.text.strip()
-                            if " by " in song_text:
-                                song_name, artist = song_text.split(" by ", 1)
-                                player_songs[player_name].append(
-                                    {
-                                        "song_name": song_name.strip(),
-                                        "song_artist": artist.strip(),
-                                    }
-                                )
-                    except Exception as e:
-                        sys.stdout.write(
-                            f"Error processing player in {team_name}: {str(e)}\n"
-                        )
-                        continue
-
-            # If no songs found, try the second method (table structure)
-            if not any(songs for songs in player_songs.values()):
-                table = bsteam.find("table", {"class": re.compile(r".*walkup.*", re.I)})
-                if table:
-                    for row in table.find_all("tr")[1:]:  # Skip header
-                        try:
-                            cols = row.find_all("td")
-                            if len(cols) >= 3:
-                                player_name = cols[0].text.strip()
-                                song_name = cols[1].text.strip()
-                                artist = cols[2].text.strip()
-
-                                if player_name and song_name:
-                                    if player_name not in player_songs:
-                                        player_songs[player_name] = []
-                                    player_songs[player_name].append(
-                                        {"song_name": song_name, "song_artist": artist}
-                                    )
-                        except Exception as e:
-                            sys.stdout.write(
-                                f"Error processing table row in {team_name}: {str(e)}\n"
-                            )
-                            continue
-
-            # If still no songs found, try the third method (legacy structure)
-            if not any(songs for songs in player_songs.values()):
-                forge_list = bsteam.find("div", {"class": "p-forge-list"})
-                if forge_list:
-                    for player in forge_list.find_all(
-                        "div", {"class": "p-featured-content__body"}
-                    ):
-                        try:
-                            name_elem = player.find("div", {"class": "u-text-h4"})
-                            if not name_elem:
-                                continue
-
+                        if name_elem:
                             player_name = name_elem.text.strip()
-                            player_songs[player_name] = []
+                            if not player_name:
+                                continue
 
-                            content = player.find(
-                                "div", {"class": "p-featured-content__text"}
+                            if player_name not in player_songs:
+                                player_songs[player_name] = []
+
+                            # Try multiple methods to find song information
+                            song_pattern = re.compile(r".*(song|music|content).*", re.I)
+                            song_containers = entry.find_all(
+                                ["div", "td", "p", "span"], {"class": song_pattern}
                             )
-                            if not content:
-                                continue
 
-                            text_elem = content.find(["p", "span"])
-                            if not text_elem:
-                                continue
-
-                            # Try to find song info in spans
-                            spans = text_elem.find_all("span")
-                            songs_found = False
-
-                            for span in spans:
-                                span_text = span.text.strip()
-                                if " by " in span_text:
-                                    song_name, artist = span_text.split(" by ", 1)
+                            for container in song_containers:
+                                content = container.text.strip()
+                                if " by " in content.lower():
+                                    song_name, artist = content.lower().split(" by ", 1)
                                     player_songs[player_name].append(
                                         {
-                                            "song_name": song_name.strip(),
-                                            "song_artist": artist.strip(),
+                                            "song_name": song_name.strip().title(),
+                                            "song_artist": artist.strip().title(),
                                         }
                                     )
                                     songs_found = True
+                                else:
+                                    # Try finding song in em/i tags
+                                    song_tag = container.find(["em", "i"])
+                                    if song_tag:
+                                        song_name = song_tag.text.strip()
+                                        # Artist might be after the song
+                                        parts = container.text.split("by")
+                                        if len(parts) > 1:
+                                            artist = parts[1].strip()
+                                            player_songs[player_name].append(
+                                                {
+                                                    "song_name": song_name.title(),
+                                                    "song_artist": artist.title(),
+                                                }
+                                            )
+                                            songs_found = True
 
-                            # If no songs found in spans, try other methods
-                            if not songs_found:
-                                # Try finding song in em/i tags
-                                song_tag = text_elem.find(["em", "i"])
-                                if song_tag:
-                                    song_name = song_tag.text.strip()
-                                    # Artist might be after the song
-                                    text_parts = text_elem.text.split("by")
-                                    if len(text_parts) > 1:
-                                        artist = text_parts[1].strip()
-                                        player_songs[player_name].append(
-                                            {
-                                                "song_name": song_name,
-                                                "song_artist": artist,
-                                            }
-                                        )
+                    except Exception as e:
+                        sys.stdout.write(f"Error processing player entry: {str(e)}\n")
+                        continue
+
+            # Method 2: Try finding a forge list structure
+            if not songs_found:
+                forge_list = bsteam.find("div", {"class": "p-forge-list"})
+                if forge_list:
+                    sys.stdout.write("- Found forge list structure\n")
+                    player_entries = forge_list.find_all(
+                        "div", {"class": "p-featured-content__body"}
+                    )
+
+                    for entry in player_entries:
+                        try:
+                            player_name = entry.find(
+                                "div", {"class": "u-text-h4"}
+                            ).text.strip()
+
+                            if player_name not in player_songs:
+                                player_songs[player_name] = []
+
+                            text_elem = entry.find(
+                                "div", {"class": "p-featured-content__text"}
+                            )
+                            if text_elem:
+                                p_tag = text_elem.find(["p", "span"])
+                                if p_tag:
+                                    # Try to find song information in spans
+                                    spans = p_tag.find_all("span")
+                                    for span in spans:
+                                        text = span.text.strip()
+                                        if " by " in text:
+                                            song_name, artist = text.split(" by ", 1)
+                                            player_songs[player_name].append(
+                                                {
+                                                    "song_name": song_name.strip(),
+                                                    "song_artist": artist.strip(),
+                                                }
+                                            )
+                                            songs_found = True
+
+                                    if not songs_found:
+                                        # Try finding song in em/i tags
+                                        song_tag = p_tag.find(["em", "i"])
+                                        if song_tag:
+                                            song_name = song_tag.text.strip()
+                                            text_parts = p_tag.text.split("by")
+                                            if len(text_parts) > 1:
+                                                artist = text_parts[1].strip()
+                                                player_songs[player_name].append(
+                                                    {
+                                                        "song_name": song_name,
+                                                        "song_artist": artist,
+                                                    }
+                                                )
+                                                songs_found = True
 
                         except Exception as e:
                             sys.stdout.write(
-                                f"Error processing legacy player in {team_name}: {str(e)}\n"
+                                f"Error processing forge list entry: {str(e)}\n"
                             )
                             continue
 
@@ -190,44 +244,48 @@ def scrape_and_store(connection_uri, spotify_client_id, spotify_client_secret):
 
         except Exception as e:
             sys.stdout.write(f"Error scraping {team_name}: {str(e)}\n")
+            continue
 
     if not team_songs:
         sys.stdout.write("No songs found for any team. Exiting.\n")
         sys.exit(1)
 
     # Initialize Spotify client
-    spotify_search = spotipy.Spotify(
-        client_credentials_manager=SpotifyClientCredentials(
-            client_id=spotify_client_id, client_secret=spotify_client_secret
+    spotify_search = None
+    if spotify_client_id and spotify_client_secret:
+        spotify_search = spotipy.Spotify(
+            client_credentials_manager=SpotifyClientCredentials(
+                client_id=spotify_client_id, client_secret=spotify_client_secret
+            )
         )
-    )
 
     # Search for songs on Spotify
-    for team, players in team_songs.items():
-        for player, songs in players.items():
-            for i, song in enumerate(team_songs[team][player].copy()):
-                song_name = song["song_name"]
-                song_artist = song["song_artist"]
+    if spotify_search:
+        for team, players in team_songs.items():
+            for player, songs in players.items():
+                for i, song in enumerate(songs):
+                    song_name = song["song_name"]
+                    song_artist = song["song_artist"]
 
-                if song_name and song_artist:
-                    try:
-                        results = spotify_search.search(
-                            q=f"track:{song_name} artist:{song_artist}",
-                            type="track",
-                            limit=1,
-                        )
-                        if results["tracks"]["items"]:
-                            team_songs[team][player][i]["spotify_id"] = results[
-                                "tracks"
-                            ]["items"][0]
-                        else:
+                    if song_name and song_artist:
+                        try:
+                            results = spotify_search.search(
+                                q=f"track:{song_name} artist:{song_artist}",
+                                type="track",
+                                limit=1,
+                            )
+                            if results["tracks"]["items"]:
+                                team_songs[team][player][i]["spotify_id"] = results[
+                                    "tracks"
+                                ]["items"][0]
+                            else:
+                                team_songs[team][player][i]["spotify_id"] = None
+                        except Exception as e:
+                            sys.stdout.write(f"Spotify search error: {str(e)}\n")
                             team_songs[team][player][i]["spotify_id"] = None
-                    except Exception as e:
-                        sys.stdout.write(f"Spotify search error: {str(e)}\n")
+                    else:
                         team_songs[team][player][i]["spotify_id"] = None
-                else:
-                    team_songs[team][player][i]["spotify_id"] = None
-                time.sleep(0.2)  # Rate limiting
+                    time.sleep(0.2)  # Rate limiting
 
     # Prepare records for database
     records = []
@@ -350,15 +408,21 @@ def scrape_and_store(connection_uri, spotify_client_id, spotify_client_secret):
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 4:
+    if len(sys.argv) < 4:
         sys.stderr.write(
             "Usage: python scraper.py <connection_uri> "
-            "<spotify_client_id> <spotify_client_secret>\n"
+            "<spotify_client_id> <spotify_client_secret> [--dry-run]\n"
         )
         sys.exit(1)
+
+    # Check for dry-run flag
+    dry_run = "--dry-run" in sys.argv
+    if dry_run:
+        sys.argv.remove("--dry-run")
 
     scrape_and_store(
         connection_uri=sys.argv[1],
         spotify_client_id=sys.argv[2],
         spotify_client_secret=sys.argv[3],
+        dry_run=dry_run,
     )
