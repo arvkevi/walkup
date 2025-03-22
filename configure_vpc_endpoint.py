@@ -1,7 +1,7 @@
 import os
 import sys
 import boto3
-import time
+import requests
 from botocore.exceptions import ClientError
 
 
@@ -13,7 +13,7 @@ def get_vpc_id():
             "http://169.254.169.254/latest/meta-data/vpc-id", timeout=1
         )
         return response.text.strip()
-    except:
+    except requests.RequestException:
         # If we're not in an EC2 instance, use the VPC ID from environment
         return os.environ.get("VPC_ID")
 
@@ -137,8 +137,11 @@ def configure_vpc_endpoint():
 
             # Wait for endpoint to be available
             print("Waiting for VPC Endpoint to be available...")
-            waiter = ec2.get_waiter("vpc_endpoint_available")
-            waiter.wait(VpcEndpointIds=[endpoint_id])
+            waiter = ec2.get_waiter("vpc_endpoint")
+            waiter.wait(
+                VpcEndpointIds=[endpoint_id],
+                Filters=[{"Name": "state", "Values": ["available"]}],
+            )
             print("VPC Endpoint is now available")
 
             return True
