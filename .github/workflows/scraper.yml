@@ -1,22 +1,18 @@
-name: MLB Walkup scraper
+name: Scrape MLB Walk-up Songs
+
 on:
   schedule:
-    - cron: '01 00 * * *'  # Run at 00:01 UTC daily
-  workflow_dispatch:  # Allow manual trigger
+    - cron: "0 0 * * *"  # Run daily at midnight UTC
 
 jobs:
   get_walkups:
     runs-on: ubuntu-latest
-    environment: production  # Use GitHub Environment for better secrets management
-    
+    environment: production
     steps:
-      - name: Checkout repo
-        uses: actions/checkout@v3
-        with:
-          persist-credentials: false
+      - uses: actions/checkout@v4
 
-      - name: Setup Python 3.10
-        uses: actions/setup-python@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
           python-version: "3.10"
 
@@ -25,55 +21,43 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Verify environment variables
-        run: |
-          if [ -z "$AWS_ACCESS_KEY_ID" ]; then
-            echo "AWS_ACCESS_KEY_ID is not set"
-            exit 1
-          fi
-          if [ -z "$AWS_SECRET_ACCESS_KEY" ]; then
-            echo "AWS_SECRET_ACCESS_KEY is not set"
-            exit 1
-          fi
-          if [ -z "$AWS_REGION" ]; then
-            echo "AWS_REGION is not set"
-            exit 1
-          fi
-          if [ -z "$VPC_ID" ]; then
-            echo "VPC_ID is not set"
-            exit 1
-          fi
-          if [ -z "$RDS_SECURITY_GROUP" ]; then
-            echo "RDS_SECURITY_GROUP is not set"
-            exit 1
-          fi
-          if [ -z "$CONNECTION_URI" ]; then
-            echo "CONNECTION_URI is not set"
-            exit 1
-          fi
-          echo "All required environment variables are set"
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
 
-      - name: Configure RDS access
+      - name: Set up RDS access
+        run: python configure_rds_access.py
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          AWS_REGION: ${{ secrets.AWS_REGION || 'us-east-1' }}  # Default to us-east-1 if not set
-          VPC_ID: ${{ secrets.VPC_ID }}
+          AWS_REGION: us-east-1
           RDS_SECURITY_GROUP: ${{ secrets.RDS_SECURITY_GROUP }}
-        run: |
-          python configure_rds_access.py
-          sleep 30  # Wait for security group changes to propagate
+
+      - name: Wait for network changes to propagate
+        run: sleep 30
 
       - name: Scrape walkups
+        run: python scraper.py "${{ secrets.CONNECTION_URI }}" "${{ secrets.SPOTIFY_CLIENT_ID }}" "${{ secrets.SPOTIFY_CLIENT_SECRET }}"
         env:
-          CONNECTION_URI: ${{ secrets.CONNECTION_URI }}
-          SPOTIFY_CLIENT_ID: ${{ secrets.SPOTIFY_CLIENT_ID }}
-          SPOTIFY_CLIENT_SECRET: ${{ secrets.SPOTIFY_CLIENT_SECRET }}
-          AWS_REGION: ${{ secrets.AWS_REGION || 'us-east-1' }}  # Default to us-east-1 if not set
-        run: |
-          python scraper.py "$CONNECTION_URI" "$SPOTIFY_CLIENT_ID" "$SPOTIFY_CLIENT_SECRET"
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_REGION: us-east-1 }
+          RDS_SECURITY_GROUP: ${{ secrets.RDS_SECURITY_GROUP }}
 
-      - name: Handle errors
+      - name: Clean up security group rules
+        if: success()  # Only run if previous steps succeeded
+        run: python cleanup_security_group.py
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_REGION: us-east-1
+          RDS_SECURITY_GROUP: ${{ secrets.RDS_SECURITY_GROUP }}
+
+      - name: Handle failure
         if: failure()
         run: |
           echo "::error::Scraper job failed. Check the logs for details."
+          python cleanup_security_group.py || true  # Try to clean up even on failure
