@@ -1,21 +1,16 @@
 import os
 import sys
 import boto3
-import requests
 from botocore.exceptions import ClientError
 
 
 def get_vpc_id():
-    """Get the VPC ID of the current instance."""
-    try:
-        # Get instance metadata
-        response = requests.get(
-            "http://169.254.169.254/latest/meta-data/vpc-id", timeout=1
-        )
-        return response.text.strip()
-    except requests.RequestException:
-        # If we're not in an EC2 instance, use the VPC ID from environment
-        return os.environ.get("VPC_ID")
+    """Get the VPC ID from environment variable."""
+    vpc_id = os.environ.get("VPC_ID")
+    if not vpc_id:
+        print("Error: VPC_ID environment variable not set")
+        sys.exit(1)
+    return vpc_id
 
 
 def create_security_group(ec2, vpc_id):
@@ -75,10 +70,6 @@ def configure_vpc_endpoint():
         )
 
         vpc_id = get_vpc_id()
-        if not vpc_id:
-            print("Could not determine VPC ID")
-            return False
-
         print(f"Using VPC: {vpc_id}")
 
         # Get subnet IDs in the VPC
@@ -160,7 +151,7 @@ if __name__ == "__main__":
         "AWS_ACCESS_KEY_ID",
         "AWS_SECRET_ACCESS_KEY",
         "AWS_REGION",
-        "VPC_ID",  # Optional if running in EC2
+        "VPC_ID",
     ]
 
     missing = [var for var in required_vars if not os.environ.get(var)]
