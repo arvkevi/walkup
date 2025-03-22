@@ -3,11 +3,18 @@ name: Scrape MLB Walk-up Songs
 on:
   schedule:
     - cron: "0 0 * * *"  # Run daily at midnight UTC
+  workflow_dispatch:  # Allow manual triggering
+
+env:
+  PYTHONUNBUFFERED: 1  # Enable real-time Python output
+  REQUESTS_CA_BUNDLE: /etc/ssl/certs/ca-certificates.crt  # Ensure SSL cert verification
 
 jobs:
   get_walkups:
     runs-on: ubuntu-latest
     environment: production
+    timeout-minutes: 30  # Set maximum job duration
+    
     steps:
       - uses: actions/checkout@v4
 
@@ -29,7 +36,11 @@ jobs:
           aws-region: us-east-1
 
       - name: Set up RDS access
-        run: python configure_rds_access.py
+        id: rds_setup
+        run: |
+          echo "Setting up RDS access..."
+          python configure_rds_access.py
+          echo "RDS access setup complete"
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
@@ -37,19 +48,67 @@ jobs:
           RDS_SECURITY_GROUP: ${{ secrets.RDS_SECURITY_GROUP }}
 
       - name: Wait for network changes to propagate
-        run: sleep 30
+        run: |
+          echo "Waiting for AWS security group changes to propagate..."
+          sleep 60  # Increased wait time to 60 seconds
+          echo "Wait complete"
+
+      - name: Test database connection
+        id: test_db
+        continue-on-error: true
+        run: |
+          python -c "
+          import psycopg2
+          import sys
+          import time
+          from urllib.parse import urlparse
+
+          def test_connection(uri):
+              parsed = urlparse(uri)
+              conn_str = f'host={parsed.hostname} port={parsed.port or 5432} dbname={parsed.path[1:]} user={parsed.username} password={parsed.password}'
+              max_attempts = 3
+              
+              for attempt in range(max_attempts):
+                  try:
+                      print(f'Attempt {attempt + 1} to connect to database...')
+                      conn = psycopg2.connect(conn_str, connect_timeout=10)
+                      conn.close()
+                      print('Database connection successful!')
+                      return True
+                  except Exception as e:
+                      print(f'Connection attempt {attempt + 1} failed: {str(e)}')
+                      if attempt < max_attempts - 1:
+                          time.sleep(10)
+              return False
+
+          success = test_connection('${{ secrets.CONNECTION_URI }}')
+          sys.exit(0 if success else 1)
+          "
+        env:
+          PYTHONUNBUFFERED: 1
 
       - name: Scrape walkups
-        run: python scraper.py "${{ secrets.CONNECTION_URI }}" "${{ secrets.SPOTIFY_CLIENT_ID }}" "${{ secrets.SPOTIFY_CLIENT_SECRET }}"
+        run: |
+          echo "Starting MLB walkup song scraper..."
+          if [ "${{ steps.test_db.outcome }}" = "success" ]; then
+            python scraper.py "${{ secrets.CONNECTION_URI }}" "${{ secrets.SPOTIFY_CLIENT_ID }}" "${{ secrets.SPOTIFY_CLIENT_SECRET }}" || exit 1
+          else
+            echo "::error::Database connection test failed. Skipping scraper."
+            exit 1
+          fi
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          AWS_REGION: us-east-1 }
+          AWS_REGION: us-east-1
           RDS_SECURITY_GROUP: ${{ secrets.RDS_SECURITY_GROUP }}
+          PYTHONUNBUFFERED: 1
 
       - name: Clean up security group rules
-        if: success()  # Only run if previous steps succeeded
-        run: python cleanup_security_group.py
+        if: always()  # Run cleanup in all cases
+        run: |
+          echo "Cleaning up security group rules..."
+          python cleanup_security_group.py
+          echo "Cleanup complete"
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
@@ -60,4 +119,3 @@ jobs:
         if: failure()
         run: |
           echo "::error::Scraper job failed. Check the logs for details."
-          python cleanup_security_group.py || true  # Try to clean up even on failure
