@@ -1,88 +1,96 @@
-import boto3
-import requests
 import os
-from dotenv import load_dotenv
+import sys
+import json
+import requests
+import boto3
+from botocore.exceptions import ClientError
 
 
-def get_my_ip():
-    """Get your current public IP address."""
-    response = requests.get("https://api.ipify.org?format=json")
-    return response.json()["ip"]
+def get_github_actions_ip_ranges():
+    """Get GitHub Actions IP ranges."""
+    try:
+        response = requests.get("https://api.github.com/meta")
+        response.raise_for_status()
+        return response.json().get("actions", [])
+    except Exception as e:
+        print(f"Error fetching GitHub Actions IP ranges: {e}")
+        return []
 
 
 def configure_rds_security():
-    """Configure RDS security group with proper inbound rules."""
-    load_dotenv()
-
-    # AWS credentials from environment variables
-    aws_access_key = os.environ.get("AWS_ACCESS_KEY_ID")
-    aws_secret_key = os.environ.get("AWS_SECRET_ACCESS_KEY")
-    security_group_id = os.environ.get("RDS_SECURITY_GROUP")
-    vpc_id = os.environ.get("VPC_ID")
-    region = os.environ.get("AWS_REGION", "us-east-1")
-
-    if not all([aws_access_key, aws_secret_key, security_group_id, vpc_id]):
-        print("Missing required environment variables.")
-        return
-
-    # Initialize AWS client
-    ec2 = boto3.client(
-        "ec2",
-        aws_access_key_id=aws_access_key,
-        aws_secret_access_key=aws_secret_key,
-        region_name=region,
-    )
-
+    """Configure RDS security group for GitHub Actions."""
     try:
-        # Get VPC CIDR block
-        vpc_response = ec2.describe_vpcs(VpcIds=[vpc_id])
-        vpc_cidr = vpc_response["Vpcs"][0]["CidrBlock"]
-
-        # Get your current IP
-        my_ip = get_my_ip()
-
-        # Remove existing rules
-        response = ec2.describe_security_groups(GroupIds=[security_group_id])
-        existing_rules = response["SecurityGroups"][0]["IpPermissions"]
-        if existing_rules:
-            ec2.revoke_security_group_ingress(
-                GroupId=security_group_id, IpPermissions=existing_rules
-            )
-
-        # Add new rules
-        ec2.authorize_security_group_ingress(
-            GroupId=security_group_id,
-            IpPermissions=[
-                {
-                    "IpProtocol": "tcp",
-                    "FromPort": 5432,
-                    "ToPort": 5432,
-                    "IpRanges": [
-                        {
-                            "CidrIp": f"{my_ip}/32",
-                            "Description": "Local development access",
-                        },
-                        {
-                            "CidrIp": vpc_cidr,
-                            "Description": "VPC access for GitHub Actions",
-                        },
-                    ],
-                }
-            ],
+        # Create EC2 client
+        ec2 = boto3.client(
+            "ec2",
+            aws_access_key_id=os.environ["AWS_ACCESS_KEY_ID"],
+            aws_secret_access_key=os.environ["AWS_SECRET_ACCESS_KEY"],
+            region_name=os.environ["AWS_REGION"],
         )
 
-        print("\nSecurity group updated successfully!")
-        print(f"\nCurrent inbound rules:")
-        print(f"1. Local development access: {my_ip}/32")
-        print(f"2. VPC access: {vpc_cidr}")
-        print("\nMake sure to update these rules if:")
-        print("- Your local IP address changes")
-        print("- You need to add access for other developers")
-        print("- You're deploying to other environments")
+        security_group_id = os.environ["RDS_SECURITY_GROUP"]
+
+        # Get current security group rules
+        response = ec2.describe_security_groups(GroupIds=[security_group_id])
+        existing_rules = response["SecurityGroups"][0]["IpPermissions"]
+
+        # Remove existing PostgreSQL rules
+        for rule in existing_rules:
+            if rule.get("FromPort") == 5432 and rule.get("ToPort") == 5432:
+                try:
+                    ec2.revoke_security_group_ingress(
+                        GroupId=security_group_id, IpPermissions=[rule]
+                    )
+                except ClientError as e:
+                    if e.response["Error"]["Code"] != "InvalidPermission.NotFound":
+                        raise
+
+        # Get GitHub Actions IP ranges
+        ip_ranges = get_github_actions_ip_ranges()
+        if not ip_ranges:
+            print("No GitHub Actions IP ranges found")
+            sys.exit(1)
+
+        # Add rules for GitHub Actions IPs
+        for i in range(0, len(ip_ranges), 50):  # Process in batches of 50
+            batch = ip_ranges[i : i + 50]
+            try:
+                ec2.authorize_security_group_ingress(
+                    GroupId=security_group_id,
+                    IpPermissions=[
+                        {
+                            "FromPort": 5432,
+                            "ToPort": 5432,
+                            "IpProtocol": "tcp",
+                            "IpRanges": [{"CidrIp": ip} for ip in batch],
+                        }
+                    ],
+                )
+                print(f"Added rules for IPs {i+1} to {i+len(batch)}")
+            except ClientError as e:
+                if e.response["Error"]["Code"] != "InvalidPermission.Duplicate":
+                    raise
+
+        print("Successfully configured security group")
+        return True
 
     except Exception as e:
         print(f"Error configuring security group: {e}")
+        return False
 
 
 if __name__ == "__main__":
-    configure_rds_security()
+    required_vars = [
+        "AWS_ACCESS_KEY_ID",
+        "AWS_SECRET_ACCESS_KEY",
+        "AWS_REGION",
+        "RDS_SECURITY_GROUP",
+    ]
+
+    missing = [var for var in required_vars if not os.environ.get(var)]
+    if missing:
+        print("Missing required environment variables:", ", ".join(missing))
+        sys.exit(1)
+
+    if not configure_rds_security():
+        sys.exit(1)
