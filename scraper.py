@@ -80,6 +80,17 @@ def scrape_and_store(
         f"Dry run mode: {dry_run}\n"
     )
 
+    # Configure requests session with headers to mimic a browser
+    session = requests.Session()
+    session.headers.update(
+        {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.5",
+            "Connection": "keep-alive",
+        }
+    )
+
     team_links = get_team_links()
     if not team_links:
         sys.stdout.write("No team links found. Exiting.\n")
@@ -91,12 +102,23 @@ def scrape_and_store(
         sys.stdout.write(f"\nProcessing team: {team_name}\n")
         sys.stdout.write(f"URL: {team_link}\n")
         try:
-            response = requests.get(team_link, timeout=30)
-            response.raise_for_status()
-            bsteam = BeautifulSoup(response.text, "html.parser")
+            # Add retry logic for requests
+            max_retries = 3
+            for attempt in range(max_retries):
+                try:
+                    response = session.get(team_link, timeout=30)
+                    response.raise_for_status()
+                    break
+                except (requests.RequestException, requests.Timeout) as e:
+                    if attempt == max_retries - 1:
+                        raise
+                    sys.stdout.write(
+                        f"Attempt {attempt + 1} failed: {str(e)}, retrying...\n"
+                    )
+                    time.sleep(2**attempt)  # Exponential backoff
 
-            # Debug output for page structure
-            sys.stdout.write("Page structure:\n")
+            bsteam = BeautifulSoup(response.text, "html.parser")
+            sys.stdout.write(f"Page content length: {len(response.text)}\n")
 
             # Initialize player songs dictionary
             player_songs = {}
@@ -201,9 +223,9 @@ def scrape_and_store(
                                     # Try to find song information in spans
                                     spans = p_tag.find_all("span")
                                     for span in spans:
-                                        text = span.text.strip()
-                                        if " by " in text:
-                                            song_name, artist = text.split(" by ", 1)
+                                        content = span.text.strip()
+                                        if " by " in content:
+                                            song_name, artist = content.split(" by ", 1)
                                             player_songs[player_name].append(
                                                 {
                                                     "song_name": song_name.strip(),
@@ -217,9 +239,9 @@ def scrape_and_store(
                                         song_tag = p_tag.find(["em", "i"])
                                         if song_tag:
                                             song_name = song_tag.text.strip()
-                                            text_parts = p_tag.text.split("by")
-                                            if len(text_parts) > 1:
-                                                artist = text_parts[1].strip()
+                                            parts = p_tag.text.split("by")
+                                            if len(parts) > 1:
+                                                artist = parts[1].strip()
                                                 player_songs[player_name].append(
                                                     {
                                                         "song_name": song_name,
@@ -236,9 +258,7 @@ def scrape_and_store(
 
             if player_songs:
                 team_songs[team_name] = player_songs
-                sys.stdout.write(
-                    f"Successfully scraped {len(player_songs)} players from {team_name}\n"
-                )
+                sys.stdout.write(f"Found {len(player_songs)} players for {team_name}\n")
             else:
                 sys.stdout.write(f"No songs found for {team_name}\n")
 
@@ -249,6 +269,10 @@ def scrape_and_store(
     if not team_songs:
         sys.stdout.write("No songs found for any team. Exiting.\n")
         sys.exit(1)
+
+    if dry_run:
+        sys.stdout.write("Dry run mode - skipping database operations\n")
+        return
 
     # Initialize Spotify client
     spotify_search = None
@@ -311,98 +335,45 @@ def scrape_and_store(
         sys.stdout.write("No records to store. Exiting.\n")
         sys.exit(1)
 
-    # Create DataFrame and store in database
+    # Create DataFrame
     df = pd.DataFrame(records)
     sys.stdout.write(f"Attempting to store {len(records)} records...\n")
 
     try:
-        # Test connection first
-        sys.stdout.write("Testing database connection...\n")
-        test_engine = create_engine(
-            connection_uri.replace("postgresql://", "postgresql+psycopg2://"),
-            connect_args={"connect_timeout": 10},
-        )
-        with test_engine.connect() as conn:
-            conn.execute(text("SELECT 1"))
-            sys.stdout.write("Database connection test successful\n")
-
-        # Create actual engine with optimized settings
+        # Configure database engine with longer timeouts and retry logic
         engine = create_engine(
             connection_uri.replace("postgresql://", "postgresql+psycopg2://"),
             connect_args={
-                "connect_timeout": 60,  # Increased timeout
+                "connect_timeout": 60,
                 "keepalives": 1,
                 "keepalives_idle": 30,
                 "keepalives_interval": 10,
                 "keepalives_count": 5,
             },
+            pool_pre_ping=True,
+            pool_recycle=3600,
+            pool_timeout=30,
         )
 
-        # Get today's date in EST
-        today = datetime.datetime.now(EST).date()
-
-        # Check for existing records for today
-        with engine.connect() as conn:
-            existing_records = pd.read_sql(
-                text(
-                    """
-                    SELECT team, player, song_name, song_artist
-                    FROM mlb_walk_up_songs
-                    WHERE walkup_date = :today
-                    """
-                ),
-                conn,
-                params={"today": today},
-            )
-
-        if not existing_records.empty:
-            # Create a set of existing records for faster lookup
-            existing_set = {
-                (row["team"], row["player"], row["song_name"], row["song_artist"])
-                for _, row in existing_records.iterrows()
-            }
-
-            # Filter out duplicates
-            new_records = []
-            for _, row in df.iterrows():
-                record_key = (
-                    row["team"],
-                    row["player"],
-                    row["song_name"],
-                    row["song_artist"],
-                )
-                if record_key not in existing_set:
-                    new_records.append(row)
-
-            if not new_records:
-                sys.stdout.write(
-                    "No new records to store. All records already exist.\n"
-                )
-                sys.exit(0)
-
-            df = pd.DataFrame(new_records)
-            sys.stdout.write(
-                f"Found {len(records) - len(new_records)} duplicate records. "
-                f"Storing {len(new_records)} new records...\n"
-            )
-
-        # Store new records
+        # Store records with chunking for better performance
         df.to_sql(
             "mlb_walk_up_songs",
             engine,
             if_exists="append",
             index=False,
-            method="multi",  # Use multi-row inserts
-            chunksize=100,  # Insert in chunks
+            method="multi",
+            chunksize=100,
         )
+
         sys.stdout.write(
             f"Successfully stored {len(df)} records\n"
-            f"({df.loc[df['spotify_uri'].notnull()].shape[0]} with Spotify URIs)\n"
+            f"({df['spotify_uri'].notna().sum()} with Spotify URIs)\n"
         )
+
     except Exception as e:
         sys.stdout.write(f"Database error: {str(e)}\n")
         sys.stdout.write(
-            "Connection URI format should be: postgresql://user:pass@host:5432/dbname\n"
+            "Please check database connection settings and security groups\n"
         )
         sys.exit(1)
 
