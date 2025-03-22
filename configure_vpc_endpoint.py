@@ -1,7 +1,8 @@
 import os
 import sys
+import time
 import boto3
-from botocore.exceptions import ClientError, WaiterError
+from botocore.exceptions import ClientError
 
 
 def get_vpc_id():
@@ -56,6 +57,32 @@ def create_security_group(ec2, vpc_id):
     except ClientError as e:
         print(f"Error creating security group: {e}")
         return None
+
+
+def wait_for_endpoint(ec2, endpoint_id, max_attempts=60):
+    """Wait for VPC Endpoint to be available."""
+    print("Waiting for VPC Endpoint to be available...")
+    for attempt in range(max_attempts):
+        try:
+            response = ec2.describe_vpc_endpoints(VpcEndpointIds=[endpoint_id])
+            state = response["VpcEndpoints"][0]["State"]
+            print(f"Endpoint state: {state}")
+
+            if state == "available":
+                print("VPC Endpoint is now available")
+                return True
+            elif state == "failed":
+                print("VPC Endpoint creation failed")
+                return False
+
+            time.sleep(5)  # Wait 5 seconds between checks
+
+        except ClientError as e:
+            print(f"Error checking endpoint status: {e}")
+            return False
+
+    print("Timeout waiting for VPC Endpoint to be available")
+    return False
 
 
 def configure_vpc_endpoint():
@@ -126,17 +153,7 @@ def configure_vpc_endpoint():
             print(f"Created VPC Endpoint: {endpoint_id}")
 
             # Wait for endpoint to be available
-            print("Waiting for VPC Endpoint to be available...")
-            try:
-                waiter = ec2.get_waiter("vpc_endpoint_exists")
-                waiter.wait(
-                    VpcEndpointIds=[endpoint_id],
-                    Filters=[{"Name": "state", "Values": ["available"]}],
-                    WaiterConfig={"Delay": 5, "MaxAttempts": 60},  # 5 minutes max
-                )
-                print("VPC Endpoint is now available")
-            except WaiterError as e:
-                print(f"Timeout waiting for VPC Endpoint: {e}")
+            if not wait_for_endpoint(ec2, endpoint_id):
                 return False
 
             return True

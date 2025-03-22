@@ -10,7 +10,7 @@ env:
   REQUESTS_CA_BUNDLE: /etc/ssl/certs/ca-certificates.crt  # Ensure SSL cert verification
 
 jobs:
-  get_walkups:
+  scrape_walkups:
     runs-on: ubuntu-latest
     environment: production
     timeout-minutes: 30  # Set maximum job duration
@@ -28,6 +28,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
+          pip install boto3 psycopg2-binary
           pip install -r requirements.txt
 
       - name: Configure AWS credentials
@@ -35,128 +36,23 @@ jobs:
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: us-east-1
+          aws-region: ${{ secrets.AWS_REGION }}
 
-      - name: Set up VPC Endpoint
-        id: vpc_setup
+      - name: Get RDS Proxy connection
+        id: get_proxy
         run: |
-          echo "Setting up VPC Endpoint..."
-          python configure_vpc_endpoint.py
-          echo "VPC Endpoint setup complete"
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          AWS_REGION: us-east-1
-          VPC_ID: ${{ secrets.VPC_ID }}
+          echo "Getting RDS Proxy connection..."
+          PROXY_URI=$(python get_proxy_connection.py)
+          echo "proxy_uri=${PROXY_URI}" >> $GITHUB_OUTPUT
 
-      - name: Wait for VPC Endpoint to be ready
-        run: |
-          echo "Waiting for VPC Endpoint to be ready..."
-          sleep 30
-          echo "Wait complete"
-
-      - name: Test database connection
-        id: test_db
-        continue-on-error: true
-        run: |
-          python -c "
-          import psycopg2
-          import sys
-          import time
-          import socket
-          from urllib.parse import urlparse
-
-          def test_connection(uri):
-              parsed = urlparse(uri)
-              host = parsed.hostname
-              port = parsed.port or 5432
-              dbname = parsed.path[1:]
-              user = parsed.username
-              password = parsed.password
-              
-              # First test DNS resolution
-              try:
-                  print(f'Resolving DNS for {host}...')
-                  ip = socket.gethostbyname(host)
-                  print(f'Resolved to IP: {ip}')
-              except socket.gaierror as e:
-                  print(f'DNS resolution failed: {str(e)}')
-                  return False
-              
-              # Test TCP connection
-              try:
-                  print(f'Testing TCP connection to {ip}:{port}...')
-                  sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                  sock.settimeout(10)
-                  sock.connect((ip, port))
-                  sock.close()
-                  print('TCP connection successful')
-              except socket.timeout:
-                  print('TCP connection timed out')
-                  return False
-              except ConnectionRefusedError:
-                  print('Connection refused - port might be closed')
-                  return False
-              except Exception as e:
-                  print(f'TCP connection failed: {str(e)}')
-                  return False
-              
-              # Now try PostgreSQL connection
-              conn_str = f'host={host} port={port} dbname={dbname} user={user} password={password}'
-              max_attempts = 3
-              
-              for attempt in range(max_attempts):
-                  try:
-                      print(f'Attempt {attempt + 1} to connect to database...')
-                      conn = psycopg2.connect(conn_str, connect_timeout=30)
-                      conn.close()
-                      print('Database connection successful!')
-                      return True
-                  except psycopg2.OperationalError as e:
-                      print(f'Database connection attempt {attempt + 1} failed: {str(e)}')
-                      if attempt < max_attempts - 1:
-                          print('Waiting 30 seconds before next attempt...')
-                          time.sleep(30)
-                  except Exception as e:
-                      print(f'Unexpected error during connection attempt {attempt + 1}: {str(e)}')
-                      if attempt < max_attempts - 1:
-                          print('Waiting 30 seconds before next attempt...')
-                          time.sleep(30)
-              return False
-
-          success = test_connection('${{ secrets.CONNECTION_URI }}')
-          sys.exit(0 if success else 1)
-          "
-        env:
-          PYTHONUNBUFFERED: 1
-          REQUESTS_CA_BUNDLE: /etc/ssl/certs/ca-certificates.crt
-
-      - name: Scrape walkups
+      - name: Run scraper
         run: |
           echo "Starting MLB walkup song scraper..."
-          if [ "${{ steps.test_db.outcome }}" = "success" ]; then
-            python scraper.py "${{ secrets.CONNECTION_URI }}" "${{ secrets.SPOTIFY_CLIENT_ID }}" "${{ secrets.SPOTIFY_CLIENT_SECRET }}" || exit 1
-          else
-            echo "::error::Database connection test failed. Skipping scraper."
-            exit 1
-          fi
+          python scraper.py "${{ steps.get_proxy.outputs.proxy_uri }}" "${{ secrets.SPOTIFY_CLIENT_ID }}" "${{ secrets.SPOTIFY_CLIENT_SECRET }}"
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          AWS_REGION: us-east-1
-          VPC_ID: ${{ secrets.VPC_ID }}
-          PYTHONUNBUFFERED: 1
-
-      - name: Clean up VPC Endpoint
-        if: always()  # Run cleanup in all cases
-        run: |
-          echo "Cleaning up VPC Endpoint..."
-          python cleanup_vpc_endpoint.py
-          echo "Cleanup complete"
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          AWS_REGION: us-east-1
+          AWS_REGION: ${{ secrets.AWS_REGION }}
           VPC_ID: ${{ secrets.VPC_ID }}
 
       - name: Handle failure
