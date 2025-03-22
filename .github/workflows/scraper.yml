@@ -37,22 +37,22 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: us-east-1
 
-      - name: Set up RDS access
-        id: rds_setup
+      - name: Set up VPC Endpoint
+        id: vpc_setup
         run: |
-          echo "Setting up RDS access..."
-          python configure_rds_access.py
-          echo "RDS access setup complete"
+          echo "Setting up VPC Endpoint..."
+          python configure_vpc_endpoint.py
+          echo "VPC Endpoint setup complete"
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           AWS_REGION: us-east-1
-          RDS_SECURITY_GROUP: ${{ secrets.RDS_SECURITY_GROUP }}
+          VPC_ID: ${{ secrets.VPC_ID }}
 
-      - name: Wait for network changes to propagate
+      - name: Wait for VPC Endpoint to be ready
         run: |
-          echo "Waiting for AWS security group changes to propagate..."
-          sleep 60  # Increased wait time to 60 seconds
+          echo "Waiting for VPC Endpoint to be ready..."
+          sleep 30
           echo "Wait complete"
 
       - name: Test database connection
@@ -102,20 +102,20 @@ jobs:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           AWS_REGION: us-east-1
-          RDS_SECURITY_GROUP: ${{ secrets.RDS_SECURITY_GROUP }}
+          VPC_ID: ${{ secrets.VPC_ID }}
           PYTHONUNBUFFERED: 1
 
-      - name: Clean up security group rules
+      - name: Clean up VPC Endpoint
         if: always()  # Run cleanup in all cases
         run: |
-          echo "Cleaning up security group rules..."
-          python cleanup_security_group.py
+          echo "Cleaning up VPC Endpoint..."
+          python cleanup_vpc_endpoint.py
           echo "Cleanup complete"
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           AWS_REGION: us-east-1
-          RDS_SECURITY_GROUP: ${{ secrets.RDS_SECURITY_GROUP }}
+          VPC_ID: ${{ secrets.VPC_ID }}
 
       - name: Handle failure
         if: failure()
