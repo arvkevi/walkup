@@ -111,7 +111,7 @@ def configure_vpc_endpoint():
                 SubnetIds=[subnet_id],
                 SecurityGroupIds=[sg_id],
                 VpcEndpointType="Interface",
-                PrivateDnsEnabled=False,  # Disable private DNS since it's already configured
+                PrivateDnsEnabled=False,  # DNS already configured
                 TagSpecifications=[
                     {
                         "ResourceType": "vpc-endpoint",
@@ -127,11 +127,8 @@ def configure_vpc_endpoint():
 
             # Wait for endpoint to be available
             print("Waiting for VPC Endpoint to be available...")
-            waiter = ec2.get_waiter("vpc_endpoint")
-            waiter.wait(
-                VpcEndpointIds=[endpoint_id],
-                Filters=[{"Name": "state", "Values": ["available"]}],
-            )
+            waiter = ec2.get_waiter("vpc_endpoint_available")
+            waiter.wait(VpcEndpointIds=[endpoint_id])
             print("VPC Endpoint is now available")
 
             return True
