@@ -38,27 +38,17 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ secrets.AWS_REGION }}
 
-      - name: Get RDS Proxy connection
-        id: get_proxy
+      - name: Run scraper with fresh proxy token
         run: |
-          echo "Getting RDS Proxy connection..."
+          echo "Starting MLB walkup song scraper..."
+          # Get fresh proxy token and use it immediately
           PROXY_URI=$(python get_proxy_connection.py | tail -n 1)
-          echo "proxy_uri=$PROXY_URI" >> "$GITHUB_OUTPUT"
+          python scraper.py "$PROXY_URI" "${{ secrets.SPOTIFY_CLIENT_ID }}" "${{ secrets.SPOTIFY_CLIENT_SECRET }}"
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           AWS_REGION: ${{ secrets.AWS_REGION }}
           CONNECTION_URI: ${{ secrets.CONNECTION_URI }}
-
-      - name: Run scraper
-        run: |
-          echo "Starting MLB walkup song scraper..."
-          python scraper.py "${{ steps.get_proxy.outputs.proxy_uri }}" "${{ secrets.SPOTIFY_CLIENT_ID }}" "${{ secrets.SPOTIFY_CLIENT_SECRET }}"
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          AWS_REGION: ${{ secrets.AWS_REGION }}
-          VPC_ID: ${{ secrets.VPC_ID }}
 
       - name: Handle failure
         if: failure()

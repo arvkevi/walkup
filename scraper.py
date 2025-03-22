@@ -308,9 +308,11 @@ def scrape_and_store(
                             sys.stdout.write(
                                 f"Spotify search error for {player}: {e}\n"
                             )
+                            # Don't continue - still create record without Spotify data
+                            spotify_data = None
                             time.sleep(0.2)  # Rate limiting
-                            continue
 
+                    # Always create record, even if Spotify search fails
                     record = {
                         "team": team,
                         "player": player,
@@ -322,7 +324,7 @@ def scrape_and_store(
                     }
                     records.append(record)
                     sys.stdout.write(
-                        f"Added record for {player}: {song['song_name']}\n"
+                        f"Added record for {player} - {song['song_name']} by {song['song_artist']}\n"
                     )
                 except Exception as e:
                     sys.stdout.write(f"Error creating record for {player}: {e}\n")
@@ -336,6 +338,7 @@ def scrape_and_store(
 
     # Create DataFrame
     df = pd.DataFrame(records)
+    sys.stdout.write(f"Created DataFrame with {len(df)} rows\n")
 
     try:
         # Configure database engine with longer timeouts and retry logic
