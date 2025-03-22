@@ -1,24 +1,50 @@
 name: MLB Walkup scraper
 on:
   schedule:
-    - cron: '01 00 * * *'
-  workflow_dispatch:
+    - cron: '01 00 * * *'  # Run at 00:01 UTC daily
+  workflow_dispatch:  # Allow manual trigger
+
 jobs:
   get_walkups:
     runs-on: ubuntu-latest
+    environment: production  # Use GitHub Environment for better secrets management
+    
     steps:
       - name: Checkout repo
         uses: actions/checkout@v3
         with:
           persist-credentials: false
+
       - name: Setup Python 3.10
         uses: actions/setup-python@v4
         with:
           python-version: "3.10"
+
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-      - name: Scrape walkups
+
+      - name: Configure RDS access
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_REGION: ${{ secrets.AWS_REGION }}
+          VPC_ID: ${{ secrets.VPC_ID }}
+          RDS_SECURITY_GROUP: ${{ secrets.RDS_SECURITY_GROUP }}
         run: |
-          python scraper.py ${{ secrets.CONNECTION_URI }} ${{ secrets.SPOTIFY_CLIENT_ID }} ${{ secrets.SPOTIFY_CLIENT_SECRET }}
+          python configure_rds_access.py
+          sleep 30  # Wait for security group changes to propagate
+
+      - name: Scrape walkups
+        env:
+          CONNECTION_URI: ${{ secrets.CONNECTION_URI }}
+          SPOTIFY_CLIENT_ID: ${{ secrets.SPOTIFY_CLIENT_ID }}
+          SPOTIFY_CLIENT_SECRET: ${{ secrets.SPOTIFY_CLIENT_SECRET }}
+        run: |
+          python scraper.py "$CONNECTION_URI" "$SPOTIFY_CLIENT_ID" "$SPOTIFY_CLIENT_SECRET"
+
+      - name: Handle errors
+        if: failure()
+        run: |
+          echo "::error::Scraper job failed. Check the logs for details."
