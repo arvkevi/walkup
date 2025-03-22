@@ -5,6 +5,7 @@ from botocore.exceptions import ClientError
 from urllib.parse import urlparse
 
 
+# Enhanced error handling and logging in get_proxy_connection.py
 def get_proxy_endpoint():
     """Get the RDS Proxy endpoint."""
     try:
@@ -27,7 +28,6 @@ def get_proxy_endpoint():
     except ClientError as e:
         print(f"Error getting proxy endpoint: {e}")
         return None
-
 
 def get_proxy_connection_string():
     """Get database connection string using IAM authentication."""
