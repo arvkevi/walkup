@@ -91,13 +91,11 @@ def configure_vpc_endpoint():
             return False
 
         # Check if endpoint already exists
+        service_name = f"com.amazonaws.{os.environ['AWS_REGION']}.rds"
         existing_endpoints = ec2.describe_vpc_endpoints(
             Filters=[
                 {"Name": "vpc-id", "Values": [vpc_id]},
-                {
-                    "Name": "service-name",
-                    "Values": [f"com.amazonaws.{os.environ['AWS_REGION']}.rds"],
-                },
+                {"Name": "service-name", "Values": [service_name]},
             ]
         )["VpcEndpoints"]
 
@@ -109,10 +107,11 @@ def configure_vpc_endpoint():
         try:
             response = ec2.create_vpc_endpoint(
                 VpcId=vpc_id,
-                ServiceName=f"com.amazonaws.{os.environ['AWS_REGION']}.rds",
+                ServiceName=service_name,
                 SubnetIds=[subnet_id],
                 SecurityGroupIds=[sg_id],
                 VpcEndpointType="Interface",
+                PrivateDnsEnabled=False,  # Disable private DNS since it's already configured
                 TagSpecifications=[
                     {
                         "ResourceType": "vpc-endpoint",
