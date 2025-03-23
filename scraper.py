@@ -196,7 +196,7 @@ def store_records(df, engine):
                         conn.execute(
                             text(
                                 """
-                                INSERT INTO walkup_songs 
+                                INSERT INTO mlb_walk_up_songs 
                                 (team, player, song_name, song_artist, walkup_date, spotify_uri, explicit)
                                 VALUES (:team, :player, :song_name, :song_artist, :walkup_date, :spotify_uri, :explicit)
                                 ON CONFLICT (team, player, song_name) 
