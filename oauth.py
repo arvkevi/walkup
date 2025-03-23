@@ -44,9 +44,9 @@ def show_auth_link(config, label, but):
     state_parameter = string_num_generator(15)
     query_params = urlencode({'redirect_uri': config['redirect_uri'], 'client_id': config['client_id'], 'response_type': 'code', 'state': state_parameter, 'scope': config['scope']})
     request_url = f"{config['authorization_endpoint']}?{query_params}"
-    if st.experimental_get_query_params():
+    if st.query_params():
         qpcache = qparms_cache(state_parameter)
-        qpcache = st.experimental_get_query_params()
+        qpcache = st.query_params()
     but.button(label, on_click=open_page, args=(request_url,), type="primary")
     st.stop()
 
@@ -61,10 +61,10 @@ def st_oauth(config=None, label="Login via OAuth", but=None):
         if not validate_config(config):
             st.error("Invalid OAuth Configuration")
             st.stop()
-        if 'code' not in st.experimental_get_query_params():
+        if 'code' not in st.query_params():
             show_auth_link(config, label, but)
-        code = st.experimental_get_query_params()['code'][0]
-        state = st.experimental_get_query_params()['state'][0]
+        code = st.query_params()['code'][0]
+        state = st.query_params()['state'][0]
         qpcache = qparms_cache(state)
         qparms = qpcache
         qpcache = {}
