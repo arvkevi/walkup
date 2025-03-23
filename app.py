@@ -8,8 +8,28 @@ from streamlit.components.v1 import html
 import spotipy
 from spotipy.oauth2 import SpotifyOAuth
 from oauth import st_oauth, _STKEY
+from sqlalchemy import create_engine, text
+from sqlalchemy.pool import QueuePool
+from dotenv import load_dotenv
 
-CONNECTION_URI = os.environ.get("CONNECTION_URI")
+# Load environment variables
+load_dotenv()
+
+# Get database connection parameters from environment variables
+db_user = os.getenv("DB_USER")
+db_password = os.getenv("DB_PASSWORD")
+db_host = os.getenv("DB_HOST")
+db_port = os.getenv("DB_PORT", "5432")
+db_name = os.getenv("DB_NAME")
+
+if not all([db_user, db_password, db_host, db_name]):
+    raise ValueError(
+        "Missing required database connection parameters in environment variables"
+    )
+
+# Construct connection URI from environment variables
+connection_uri = f"postgresql://{db_user}:{db_password}@{db_host}:{db_port}/{db_name}"
+
 SPOTIFY_CLIENT_ID = os.environ.get("SPOTIFY_CLIENT_ID")
 SPOTIFY_CLIENT_SECRET = os.environ.get("SPOTIFY_CLIENT_SECRET")
 REDIRECT_URI = os.environ.get("REDIRECT_URI")
@@ -46,17 +66,16 @@ def get_mlb_walkup_data(
     )
     walkup_song_data = cur.fetchall()
     conn.close()
-    column_names = [
-        "player",
-        "song_name",
-        "song_artist",
-        "team",
-        "walkup_date",
-        "spotify_uri",
-        "explicit",
-    ]
+
+    # Get column names from cursor description
+    column_names = [desc[0] for desc in cur.description]
+
+    # Create DataFrame with all columns
     walkup_data = pd.DataFrame(walkup_song_data, columns=column_names)
+
+    # Capitalize team names
     walkup_data["team"] = walkup_data["team"].str.capitalize()
+
     return walkup_data
 
 
@@ -80,7 +99,10 @@ gif.markdown(
 )
 
 # Date picker and metrics
-maxdate = pd.read_sql("SELECT MAX(walkup_date) FROM mlb_walk_up_songs", CONNECTION_URI.replace("postgresql", "postgresql+psycopg2"))
+maxdate = pd.read_sql(
+    "SELECT MAX(walkup_date) FROM mlb_walk_up_songs",
+    connection_uri.replace("postgresql", "postgresql+psycopg2"),
+)
 maxdate = maxdate["max"].iloc[0]
 col1, col2, col3, col4, col5 = st.columns([0.2] * 5, gap="large")
 date = col1.date_input(
@@ -90,11 +112,28 @@ date = col1.date_input(
     max_value=maxdate,
 )
 
-data = get_mlb_walkup_data(CONNECTION_URI, date)
-data["spotify_uri"] = data.apply(lambda row: row["spotify_uri"].replace("spotify:track:", "https://open.spotify.com/track/") if row["spotify_uri"] else None, axis=1)
+data = get_mlb_walkup_data(connection_uri, date)
+data["spotify_uri"] = data.apply(
+    lambda row: (
+        row["spotify_uri"].replace("spotify:track:", "https://open.spotify.com/track/")
+        if row["spotify_uri"]
+        else None
+    ),
+    axis=1,
+)
 n_spotify = data["spotify_uri"].notnull().sum()
 data["Selected"] = [False] * data.shape[0]
-data = data[["Selected", "team", "player", "song_name", "song_artist", "explicit", "spotify_uri"]]
+data = data[
+    [
+        "Selected",
+        "team",
+        "player",
+        "song_name",
+        "song_artist",
+        "explicit",
+        "spotify_uri",
+    ]
+]
 data.sort_values(by=["team", "player"], inplace=True)
 
 col2.metric("Songs", data["song_name"].nunique())
@@ -108,7 +147,14 @@ filter_in_spotify = col5.checkbox("Only songs in Spotify?", value=False)
 if data.empty:
     st.warning("No walkup songs found for this date.")
 else:
-    disabled_columns = ["team", "player", "song_name", "song_artist", "explicit", "spotify_uri"]
+    disabled_columns = [
+        "team",
+        "player",
+        "song_name",
+        "song_artist",
+        "explicit",
+        "spotify_uri",
+    ]
     column_config = {
         "Selected": st.column_config.CheckboxColumn(
             "Selected?",
@@ -119,7 +165,7 @@ else:
             "Spotify Link (click link to follow)",
             help="Link to Spotify song",
             disabled=True,
-        )
+        ),
     }
     if filter_explicit:
         data = data[data["explicit"] == False]
@@ -127,14 +173,24 @@ else:
         data = data[data["spotify_uri"].notnull()]
     if select_all:
         data["Selected"] = [True] * data.shape[0]
-    edited_df = st.data_editor(data=data, column_config=column_config, hide_index=True, use_container_width=True, num_rows="fixed", disabled=disabled_columns)
+    edited_df = st.data_editor(
+        data=data,
+        column_config=column_config,
+        hide_index=True,
+        use_container_width=True,
+        num_rows="fixed",
+        disabled=disabled_columns,
+    )
     # Extracting selected rows
-    selected_rows_df = edited_df[edited_df['Selected']]
+    selected_rows_df = edited_df[edited_df["Selected"]]
     st.caption("Report issues on [GitHub](https://github.com/arvkevi/walkup/issues)")
 
 try:
-    but.image('https://storage.googleapis.com/pr-newsroom-wp/1/2018/11/Spotify_Logo_RGB_Green.png', width=200)
-    st_oauth(config=config, label='Start by Logging into Spotify', but=but)
+    but.image(
+        "https://storage.googleapis.com/pr-newsroom-wp/1/2018/11/Spotify_Logo_RGB_Green.png",
+        width=200,
+    )
+    st_oauth(config=config, label="Start by Logging into Spotify", but=but)
     spotify = spotipy.Spotify(st.session_state[_STKEY]["access_token"])
     selected = "Check songs with the 'Selected?' column."
     search_bar = "Hover over top right of the table for search."
@@ -152,7 +208,9 @@ except:
 with st.form("playlist-form", clear_on_submit=False):
     st.subheader("Create Spotify playlist from selected songs")
     col, buff, buff2 = st.columns([0.2, 0.6, 0.2])
-    playlist_name = col.text_input("Playlist Name", value=f"MLB Walkup Songs {date}", max_chars=25)
+    playlist_name = col.text_input(
+        "Playlist Name", value=f"MLB Walkup Songs {date}", max_chars=25
+    )
 
     if not selected_rows_df.empty:
         selected_rows_df = selected_rows_df.drop(columns=["Selected"])
