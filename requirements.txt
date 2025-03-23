@@ -1,3 +1,4 @@
+backoff
 beautifulsoup4
 lxml
 pandas
@@ -7,3 +8,5 @@ requests
 spotipy
 sqlalchemy
 streamlit
+boto3
+python-dotenv

@@ -1,24 +1,35 @@
-name: MLB Walkup scraper
+name: MLB Walk-up Songs Scraper
+
 on:
   schedule:
-    - cron: '01 00 * * *'
-  workflow_dispatch:
+    - cron: '0 0 * * *'  # Run daily at midnight UTC
+  workflow_dispatch:  # Allow manual triggering
+
 jobs:
-  get_walkups:
+  scrape:
     runs-on: ubuntu-latest
+    
     steps:
-      - name: Checkout repo
-        uses: actions/checkout@v3
-        with:
-          persist-credentials: false
-      - name: Setup Python 3.10
-        uses: actions/setup-python@v4
-        with:
-          python-version: "3.10"
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-      - name: Scrape walkups
-        run: |
-          python scraper.py ${{ secrets.CONNECTION_URI }} ${{ secrets.SPOTIFY_CLIENT_ID }} ${{ secrets.SPOTIFY_CLIENT_SECRET }}
+    - uses: actions/checkout@v3
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+        
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        
+    - name: Run scraper
+      env:
+        DB_USER: ${{ secrets.DB_USER }}
+        DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+        DB_HOST: ${{ secrets.DB_HOST }}
+        DB_PORT: ${{ secrets.DB_PORT }}
+        DB_NAME: ${{ secrets.DB_NAME }}
+        SPOTIFY_CLIENT_ID: ${{ secrets.SPOTIFY_CLIENT_ID }}
+        SPOTIFY_CLIENT_SECRET: ${{ secrets.SPOTIFY_CLIENT_SECRET }}
+      run: |
+        python scraper.py "$SPOTIFY_CLIENT_ID" "$SPOTIFY_CLIENT_SECRET" --verbose
