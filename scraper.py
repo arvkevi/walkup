@@ -287,6 +287,224 @@ def scrape_and_store(spotify_client_id, spotify_client_secret, dry_run=False):
         raise
 
 
+def scrape_team_songs(url, team, sp):
+    """Scrape songs for a specific team."""
+    try:
+        # Configure requests session with headers to mimic a browser
+        session = requests.Session()
+        session.headers.update(
+            {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+                "Accept-Language": "en-US,en;q=0.5",
+                "Connection": "keep-alive",
+            }
+        )
+
+        # Add retry logic for requests
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                response = session.get(url, timeout=30)
+                response.raise_for_status()
+                break
+            except (requests.RequestException, requests.Timeout) as e:
+                if attempt == max_retries - 1:
+                    raise
+                log(f"Attempt {attempt + 1} failed: {str(e)}, retrying...")
+                time.sleep(2**attempt)  # Exponential backoff
+
+        bsteam = BeautifulSoup(response.text, "html.parser")
+        log(f"Page content length: {len(response.text)}")
+
+        songs = []
+        # Method 1: Try finding content in the forge list
+        try:
+            players = bsteam.find("div", {"class": "p-forge-list"}).findAll(
+                "div", {"class": "p-featured-content__body"}
+            )
+            for player in players:
+                player_name = player.find("div", {"class": "u-text-h4"}).text.strip()
+                p_tag = player.find("div", {"class": "p-featured-content__text"}).find(
+                    ["p", "span"]
+                )
+                spans = p_tag.find_all("span")
+
+                player_songs = set()
+                # Extract song names and artists
+                for span in spans:
+                    text = span.get_text().strip()
+                    if " by " in text:
+                        song, artist = text.split(" by ", 1)
+                        player_songs.add((song.strip(), artist.strip()))
+
+                if not player_songs:
+                    for a_tag in p_tag.find_all("a"):
+                        try:
+                            song_name = a_tag.em.get_text().strip()
+                            artist_name = a_tag.next_sibling.strip(" by ")
+                            player_songs.add((song_name, artist_name))
+                        except:
+                            pass
+
+                if player_songs:
+                    for song_name, song_artist in player_songs:
+                        # Search for song on Spotify
+                        spotify_data = None
+                        if sp and song_name and song_artist:
+                            try:
+                                search_query = f"track:{song_name} artist:{song_artist}"
+                                results = sp.search(
+                                    q=search_query, type="track", limit=1
+                                )
+                                if results["tracks"]["items"]:
+                                    spotify_data = results["tracks"]["items"][0]
+                                time.sleep(0.2)  # Rate limiting
+                            except Exception as e:
+                                log(f"Spotify search error: {e}")
+                                spotify_data = None
+
+                        songs.append(
+                            {
+                                "team": team,
+                                "player": player_name,
+                                "song_name": song_name,
+                                "song_artist": song_artist,
+                                "walkup_date": datetime.datetime.now(EST).date(),
+                                "spotify_uri": (
+                                    spotify_data["uri"] if spotify_data else None
+                                ),
+                                "explicit": (
+                                    spotify_data["explicit"] if spotify_data else None
+                                ),
+                            }
+                        )
+
+        except Exception as e:
+            log(f"{team}: forge list method failed, trying walkup music method...")
+
+        # Method 2: Try finding content in the walkup music table
+        if not songs:
+            try:
+                song_table = bsteam.find("div", {"data-testid": "player-walkup-music"})
+                table = song_table.find("table")
+
+                # Find all player entries
+                player_entries = table.find_all(
+                    "tr", {"data-selected": "false", "data-underlined": "false"}
+                )
+
+                for entry in player_entries:
+                    # Extract the player name
+                    player_first_name = entry.find(
+                        "div", {"data-testid": re.compile(r"spot-tag__super-name")}
+                    )
+                    player_last_name = entry.find(
+                        "div", {"data-testid": re.compile(r"spot-tag__name")}
+                    )
+
+                    if player_first_name and player_last_name:
+                        player_first_name = " ".join(
+                            tag.get_text() for tag in player_first_name
+                        )
+                        player_last_name = " ".join(
+                            tag.get_text() for tag in player_last_name
+                        )
+                        player_name = f"{player_first_name} {player_last_name}".strip()
+
+                        # Find all songs for this player
+                        player_songs = entry.find_all(
+                            "div",
+                            {
+                                "data-testid": re.compile(
+                                    r"player-walkup-music-song-content-\d+"
+                                )
+                            },
+                        )
+
+                        for song in player_songs:
+                            song_name = (
+                                song.find(
+                                    "div",
+                                    {
+                                        "class": "player-walkup-music__song--content--songname"
+                                    },
+                                )
+                                .get_text()
+                                .strip()
+                            )
+                            artist_name = (
+                                song.find(
+                                    "div",
+                                    {
+                                        "class": "player-walkup-music__song--content--artistname"
+                                    },
+                                )
+                                .get_text()
+                                .strip()
+                            )
+
+                            if song_name and artist_name:
+                                # Search for song on Spotify
+                                spotify_data = None
+                                if sp and song_name and artist_name:
+                                    try:
+                                        search_query = (
+                                            f"track:{song_name} artist:{artist_name}"
+                                        )
+                                        results = sp.search(
+                                            q=search_query, type="track", limit=1
+                                        )
+                                        if results["tracks"]["items"]:
+                                            spotify_data = results["tracks"]["items"][0]
+                                        time.sleep(0.2)  # Rate limiting
+                                    except Exception as e:
+                                        log(f"Spotify search error: {e}")
+                                        spotify_data = None
+
+                                songs.append(
+                                    {
+                                        "team": team,
+                                        "player": player_name,
+                                        "song_name": song_name,
+                                        "song_artist": artist_name,
+                                        "walkup_date": datetime.datetime.now(
+                                            EST
+                                        ).date(),
+                                        "spotify_uri": (
+                                            spotify_data["uri"]
+                                            if spotify_data
+                                            else None
+                                        ),
+                                        "explicit": (
+                                            spotify_data["explicit"]
+                                            if spotify_data
+                                            else None
+                                        ),
+                                    }
+                                )
+
+            except Exception as e:
+                log(f"{team}: walkup music method failed, skipping...")
+
+        if songs:
+            log(f"Found {len(songs)} songs for {team}")
+            if VERBOSE_MODE:
+                for song in songs:
+                    log(f"  Player: {song['player']}")
+                    log(f"    Song: {song['song_name']} by {song['song_artist']}")
+                    if song["spotify_uri"]:
+                        log(f"    Spotify URI: {song['spotify_uri']}")
+        else:
+            log(f"No songs found for {team}")
+
+        return songs
+
+    except Exception as e:
+        log(f"Error scraping {team}: {str(e)}")
+        return []
+
+
 if __name__ == "__main__":
     if len(sys.argv) < 2:  # Only need Spotify credentials now
         sys.stderr.write(
