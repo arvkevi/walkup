@@ -1,3 +1,20 @@
+#!/usr/bin/env python3
+"""
+Fixed MLB Walk-up Songs Scraper
+
+This fixed version addresses the critical issue where all songs were being assigned 
+the current scrape date as their "walkup_date", creating artificial clustering in 
+causal analysis.
+
+Key Changes:
+1. Uses first_seen_date and last_updated_date instead of walkup_date
+2. Only tracks when songs are first discovered or changed
+3. Maintains historical tracking of actual song changes
+4. Prevents artificial temporal clustering in causal analysis
+
+Usage: python scraper.py <spotify_client_id> <spotify_client_secret> [--verbose]
+"""
+
 import datetime
 from bs4 import BeautifulSoup
 import requests
@@ -64,6 +81,176 @@ MLB_TEAMS = {
 }
 
 
+def create_fixed_database_schema(engine):
+    """Create the improved database schema with proper change tracking."""
+    create_table_sql = """
+    CREATE TABLE IF NOT EXISTS mlb_walk_up_songs_v2 (
+        id SERIAL PRIMARY KEY,
+        team VARCHAR(50) NOT NULL,
+        player VARCHAR(255) NOT NULL,
+        song_name VARCHAR(500) NOT NULL,
+        song_artist VARCHAR(500),
+        spotify_uri VARCHAR(255),
+        explicit BOOLEAN,
+        first_seen_date DATE NOT NULL,
+        last_updated_date DATE NOT NULL,
+        is_current BOOLEAN DEFAULT TRUE,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(team, player, song_name)
+    );
+    
+    -- Index for efficient querying
+    CREATE INDEX IF NOT EXISTS idx_player_current ON mlb_walk_up_songs_v2 (team, player, is_current);
+    CREATE INDEX IF NOT EXISTS idx_first_seen ON mlb_walk_up_songs_v2 (first_seen_date);
+    CREATE INDEX IF NOT EXISTS idx_last_updated ON mlb_walk_up_songs_v2 (last_updated_date);
+    """
+    
+    with engine.connect() as conn:
+        conn.execute(text(create_table_sql))
+        conn.commit()
+    
+    log("✅ Fixed database schema created successfully!")
+
+
+def get_existing_songs(engine):
+    """Get existing songs from database to compare for changes."""
+    try:
+        with engine.connect() as conn:
+            result = conn.execute(text("""
+                SELECT team, player, song_name, song_artist, spotify_uri, explicit, 
+                       first_seen_date, last_updated_date
+                FROM mlb_walk_up_songs_v2 
+                WHERE is_current = TRUE
+            """))
+            
+            existing_songs = {}
+            for row in result:
+                key = (row.team, row.player)
+                if key not in existing_songs:
+                    existing_songs[key] = []
+                existing_songs[key].append({
+                    'song_name': row.song_name,
+                    'song_artist': row.song_artist,
+                    'spotify_uri': row.spotify_uri,
+                    'explicit': row.explicit,
+                    'first_seen_date': row.first_seen_date,
+                    'last_updated_date': row.last_updated_date
+                })
+            
+            return existing_songs
+    except Exception as e:
+        log(f"Error getting existing songs: {e}")
+        return {}
+
+
+def detect_song_changes(current_songs, existing_songs, scrape_date):
+    """
+    Detect actual song changes by comparing current scrape with existing data.
+    
+    Returns:
+    - new_songs: Songs never seen before
+    - changed_songs: Players who changed their songs
+    - unchanged_songs: Songs that remain the same
+    """
+    new_songs = []
+    changed_songs = []
+    unchanged_songs = []
+    
+    for song_data in current_songs:
+        team = song_data['team']
+        player = song_data['player']
+        song_name = song_data['song_name']
+        
+        player_key = (team, player)
+        
+        if player_key not in existing_songs:
+            # Completely new player
+            new_songs.append({
+                **song_data,
+                'first_seen_date': scrape_date,
+                'last_updated_date': scrape_date,
+                'is_current': True
+            })
+        else:
+            # Check if this is a new song for this player
+            existing_player_songs = existing_songs[player_key]
+            song_exists = any(
+                existing['song_name'] == song_name 
+                for existing in existing_player_songs
+            )
+            
+            if song_exists:
+                # Song unchanged, just update last_updated_date
+                unchanged_songs.append({
+                    **song_data,
+                    'last_updated_date': scrape_date
+                })
+            else:
+                # This is a song change!
+                changed_songs.append({
+                    **song_data,
+                    'first_seen_date': scrape_date,  # This is when we first saw this new song
+                    'last_updated_date': scrape_date,
+                    'is_current': True
+                })
+    
+    return new_songs, changed_songs, unchanged_songs
+
+
+def store_songs_with_change_tracking(engine, new_songs, changed_songs, unchanged_songs, scrape_date):
+    """Store songs with proper change tracking."""
+    try:
+        with engine.connect() as conn:
+            # Start transaction
+            trans = conn.begin()
+            
+            # Mark old songs as no longer current for players with changes
+            if changed_songs:
+                players_with_changes = [(song['team'], song['player']) for song in changed_songs]
+                for team, player in players_with_changes:
+                    conn.execute(text("""
+                        UPDATE mlb_walk_up_songs_v2 
+                        SET is_current = FALSE, updated_at = CURRENT_TIMESTAMP
+                        WHERE team = :team AND player = :player AND is_current = TRUE
+                    """), {'team': team, 'player': player})
+            
+            # Insert new songs
+            all_new_entries = new_songs + changed_songs
+            if all_new_entries:
+                conn.execute(text("""
+                    INSERT INTO mlb_walk_up_songs_v2 
+                    (team, player, song_name, song_artist, spotify_uri, explicit, 
+                     first_seen_date, last_updated_date, is_current)
+                    VALUES (:team, :player, :song_name, :song_artist, :spotify_uri, 
+                            :explicit, :first_seen_date, :last_updated_date, :is_current)
+                """), all_new_entries)
+            
+            # Update last_updated_date for unchanged songs
+            if unchanged_songs:
+                for song in unchanged_songs:
+                    conn.execute(text("""
+                        UPDATE mlb_walk_up_songs_v2 
+                        SET last_updated_date = :last_updated_date, updated_at = CURRENT_TIMESTAMP
+                        WHERE team = :team AND player = :player AND song_name = :song_name
+                    """), song)
+            
+            trans.commit()
+            
+            log(f"✅ Stored: {len(new_songs)} new songs, {len(changed_songs)} changes, {len(unchanged_songs)} unchanged")
+            
+            if changed_songs:
+                log("🎵 SONG CHANGES DETECTED:")
+                for song in changed_songs[:10]:  # Show first 10 changes
+                    log(f"   {song['team']} - {song['player']}: {song['song_name']}")
+                if len(changed_songs) > 10:
+                    log(f"   ... and {len(changed_songs) - 10} more changes")
+                    
+    except Exception as e:
+        log(f"❌ Error storing songs: {e}")
+        raise
+
+
 def get_team_links():
     """Get all MLB team links."""
     try:
@@ -121,7 +308,7 @@ def validate_connection_uri(uri):
         raise ValueError(f"Invalid connection URI format: {str(e)}")
 
 
-def get_db_connection(connection_uri):
+def get_database_engine():
     """Create a database connection with connection pooling and retries."""
     try:
         # Get connection parameters from environment variables
@@ -145,19 +332,19 @@ def get_db_connection(connection_uri):
         engine = create_engine(
             connection_uri,
             poolclass=QueuePool,
-            pool_size=3,  # Reduced pool size
-            max_overflow=5,  # Reduced max overflow
-            pool_timeout=60,  # Increased timeout
+            pool_size=3,
+            max_overflow=5,
+            pool_timeout=60,
             pool_pre_ping=True,
-            pool_recycle=1800,  # Recycle connections after 30 minutes
+            pool_recycle=1800,
             connect_args={
-                "connect_timeout": 30,  # Increased connection timeout
+                "connect_timeout": 30,
                 "keepalives": 1,
-                "keepalives_idle": 60,  # Increased idle time
-                "keepalives_interval": 30,  # Increased interval
-                "keepalives_count": 3,  # Reduced count
-                "application_name": "mlb_walkup_scraper",  # Added application name
-                "options": "-c statement_timeout=60000",  # 60 second statement timeout
+                "keepalives_idle": 60,
+                "keepalives_interval": 30,
+                "keepalives_count": 3,
+                "application_name": "mlb_walkup_scraper_v2",
+                "options": "-c statement_timeout=60000",
             },
         )
 
@@ -169,121 +356,6 @@ def get_db_connection(connection_uri):
 
     except Exception as e:
         log(f"Database connection error: {str(e)}")
-        raise
-
-
-def store_records(df, engine):
-    """Store records in the database with retries and chunking."""
-    try:
-        # Split DataFrame into smaller chunks
-        chunk_size = 100
-        total_chunks = len(df) // chunk_size + (1 if len(df) % chunk_size else 0)
-
-        for i in range(0, len(df), chunk_size):
-            chunk = df.iloc[i : i + chunk_size]
-            chunk_num = (i // chunk_size) + 1
-
-            log(f"Processing chunk {chunk_num}/{total_chunks} ({len(chunk)} records)")
-
-            # Retry logic for each chunk
-            max_retries = 3
-            retry_delay = 5
-
-            for attempt in range(max_retries):
-                try:
-                    # Use SQLAlchemy's bulk_insert_mappings for better performance
-                    with engine.connect() as conn:
-                        conn.execute(
-                            text(
-                                """
-                                INSERT INTO mlb_walk_up_songs 
-                                (team, player, song_name, song_artist, walkup_date, spotify_uri, explicit)
-                                VALUES (:team, :player, :song_name, :song_artist, :walkup_date, :spotify_uri, :explicit)
-                                ON CONFLICT (team, player, song_name) 
-                                DO UPDATE SET
-                                    song_artist = EXCLUDED.song_artist,
-                                    walkup_date = EXCLUDED.walkup_date,
-                                    spotify_uri = EXCLUDED.spotify_uri,
-                                    explicit = EXCLUDED.explicit
-                            """
-                            ),
-                            chunk.to_dict("records"),
-                        )
-                        conn.commit()
-                        log(f"Successfully stored chunk {chunk_num}")
-                        break
-
-                except OperationalError as e:
-                    if attempt < max_retries - 1:
-                        log(
-                            f"Database error on chunk {chunk_num}, attempt {attempt + 1}/{max_retries}: {str(e)}"
-                        )
-                        time.sleep(retry_delay * (attempt + 1))  # Exponential backoff
-                        continue
-                    else:
-                        log(
-                            f"Failed to store chunk {chunk_num} after {max_retries} attempts"
-                        )
-                        raise
-
-                except Exception as e:
-                    log(f"Unexpected error storing chunk {chunk_num}: {str(e)}")
-                    raise
-
-    except Exception as e:
-        log(f"Error storing records: {str(e)}")
-        raise
-
-
-@backoff.on_exception(backoff.expo, Exception, max_tries=5)
-def scrape_and_store(spotify_client_id, spotify_client_secret, dry_run=False):
-    """Scrape MLB walk-up songs and store them in the database."""
-    try:
-        # Initialize Spotify client
-        sp = spotipy.Spotify(
-            client_credentials_manager=SpotifyClientCredentials(
-                client_id=spotify_client_id, client_secret=spotify_client_secret
-            )
-        )
-
-        # Get all team links
-        team_links = get_team_links()
-        if not team_links:
-            log("No team links found")
-            return
-
-        # Initialize database connection
-        engine = get_db_connection(None)  # No longer need connection_uri parameter
-        if not engine:
-            log("Failed to initialize database connection")
-            return
-
-        # Process each team
-        for team, url in team_links.items():
-            try:
-                log(f"\nProcessing team: {team}")
-                songs = scrape_team_songs(url, team, sp)
-
-                if songs:
-                    log(f"Found {len(songs)} songs for {team}")
-                    df = pd.DataFrame(songs)
-
-                    if not dry_run:
-                        store_records(df, engine)
-                    else:
-                        log("DRY RUN: Would store records:")
-                        log(df.to_string())
-                else:
-                    log(f"No songs found for {team}")
-
-            except Exception as e:
-                log(f"Error processing team {team}: {str(e)}")
-                continue
-
-        log("\nScraping completed successfully")
-
-    except Exception as e:
-        log(f"Error in scrape_and_store: {str(e)}")
         raise
 
 
@@ -312,7 +384,7 @@ def scrape_team_songs(url, team, sp):
                 if attempt == max_retries - 1:
                     raise
                 log(f"Attempt {attempt + 1} failed: {str(e)}, retrying...")
-                time.sleep(2**attempt)  # Exponential backoff
+                time.sleep(2**attempt)
 
         bsteam = BeautifulSoup(response.text, "html.parser")
         log(f"Page content length: {len(response.text)}")
@@ -344,7 +416,7 @@ def scrape_team_songs(url, team, sp):
                             song_name = a_tag.em.get_text().strip()
                             artist_name = a_tag.next_sibling.strip(" by ")
                             player_songs.add((song_name, artist_name))
-                        except:
+                        except AttributeError:
                             pass
 
                 if player_songs:
@@ -359,7 +431,7 @@ def scrape_team_songs(url, team, sp):
                                 )
                                 if results["tracks"]["items"]:
                                     spotify_data = results["tracks"]["items"][0]
-                                time.sleep(0.2)  # Rate limiting
+                                time.sleep(0.2)
                             except Exception as e:
                                 log(f"Spotify search error: {e}")
                                 spotify_data = None
@@ -370,7 +442,6 @@ def scrape_team_songs(url, team, sp):
                                 "player": player_name,
                                 "song_name": song_name,
                                 "song_artist": song_artist,
-                                "walkup_date": datetime.datetime.now(EST).date(),
                                 "spotify_uri": (
                                     spotify_data["uri"] if spotify_data else None
                                 ),
@@ -380,7 +451,7 @@ def scrape_team_songs(url, team, sp):
                             }
                         )
 
-        except Exception as e:
+        except Exception:
             log(f"{team}: forge list method failed, trying walkup music method...")
 
         # Method 2: Try finding content in the walkup music table
@@ -457,9 +528,9 @@ def scrape_team_songs(url, team, sp):
                                         )
                                         if results["tracks"]["items"]:
                                             spotify_data = results["tracks"]["items"][0]
-                                        time.sleep(0.2)  # Rate limiting
-                                    except Exception as e:
-                                        log(f"Spotify search error: {e}")
+                                        time.sleep(0.2)
+                                    except Exception:
+                                        log(f"Spotify search error for {song_name}")
                                         spotify_data = None
 
                                 songs.append(
@@ -468,9 +539,6 @@ def scrape_team_songs(url, team, sp):
                                         "player": player_name,
                                         "song_name": song_name,
                                         "song_artist": artist_name,
-                                        "walkup_date": datetime.datetime.now(
-                                            EST
-                                        ).date(),
                                         "spotify_uri": (
                                             spotify_data["uri"]
                                             if spotify_data
@@ -484,7 +552,7 @@ def scrape_team_songs(url, team, sp):
                                     }
                                 )
 
-            except Exception as e:
+            except Exception:
                 log(f"{team}: walkup music method failed, skipping...")
 
         if songs:
@@ -505,25 +573,89 @@ def scrape_team_songs(url, team, sp):
         return []
 
 
-if __name__ == "__main__":
-    if len(sys.argv) < 2:  # Only need Spotify credentials now
-        sys.stderr.write(
-            "Usage: python scraper.py "
-            "<spotify_client_id> <spotify_client_secret> [--dry-run] [--verbose]\n"
-        )
+def scrape_all_teams(spotify_client_id, spotify_client_secret):
+    """Scrape all MLB teams and return combined song data."""
+    try:
+        # Initialize Spotify client
+        sp = None
+        if spotify_client_id and spotify_client_secret:
+            try:
+                client_credentials_manager = SpotifyClientCredentials(
+                    client_id=spotify_client_id, client_secret=spotify_client_secret
+                )
+                sp = spotipy.Spotify(client_credentials_manager=client_credentials_manager)
+                log("Spotify client initialized successfully")
+            except Exception as e:
+                log(f"Warning: Failed to initialize Spotify client: {e}")
+
+        # Get team links
+        team_links = get_team_links()
+        if not team_links:
+            log("No team links found")
+            return []
+
+        all_songs = []
+        # Process each team
+        for team, url in team_links.items():
+            try:
+                log(f"\nProcessing team: {team}")
+                songs = scrape_team_songs(url, team, sp)
+                all_songs.extend(songs)
+
+            except Exception:
+                log(f"Error processing team {team}")
+                continue
+
+        log(f"\nScraping completed. Total songs found: {len(all_songs)}")
+        return all_songs
+
+    except Exception as e:
+        log(f"Error in scrape_all_teams: {str(e)}")
+        raise
+
+
+def main():
+    """Main scraper function with fixed change tracking."""
+    if len(sys.argv) < 3:
+        print("Usage: python scraper.py <spotify_client_id> <spotify_client_secret> [--verbose]")
         sys.exit(1)
-
-    # Check for flags
-    dry_run = "--dry-run" in sys.argv
-    if dry_run:
-        sys.argv.remove("--dry-run")
-
+    
+    global VERBOSE_MODE
     VERBOSE_MODE = "--verbose" in sys.argv
-    if VERBOSE_MODE:
-        sys.argv.remove("--verbose")
-
-    scrape_and_store(
-        spotify_client_id=sys.argv[1],
-        spotify_client_secret=sys.argv[2],
-        dry_run=dry_run,
+    
+    scrape_date = datetime.datetime.now(EST).date()
+    log(f"🚀 Starting fixed MLB walkup songs scraper on {scrape_date}")
+    
+    # Get database connection
+    engine = get_database_engine()
+    if not engine:
+        log("❌ Failed to connect to database")
+        sys.exit(1)
+    
+    # Create fixed schema
+    create_fixed_database_schema(engine)
+    
+    # Get existing songs for comparison
+    existing_songs = get_existing_songs(engine)
+    log(f"📊 Found {len(existing_songs)} players with existing songs")
+    
+    # Scrape current songs (using existing scraper logic)
+    current_songs = scrape_all_teams(sys.argv[1], sys.argv[2])
+    log(f"🎵 Scraped {len(current_songs)} current songs")
+    
+    # Detect changes
+    new_songs, changed_songs, unchanged_songs = detect_song_changes(
+        current_songs, existing_songs, scrape_date
     )
+    
+    # Store with proper change tracking
+    store_songs_with_change_tracking(
+        engine, new_songs, changed_songs, unchanged_songs, scrape_date
+    )
+    
+    log("✅ Scraper completed successfully!")
+    log(f"📈 Summary: {len(new_songs)} new, {len(changed_songs)} changed, {len(unchanged_songs)} unchanged")
+
+
+if __name__ == "__main__":
+    main()
