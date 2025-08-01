@@ -84,7 +84,7 @@ MLB_TEAMS = {
 def create_fixed_database_schema(engine):
     """Create the improved database schema with proper change tracking."""
     create_table_sql = """
-    CREATE TABLE IF NOT EXISTS mlb_walk_up_songs_v2 (
+    CREATE TABLE IF NOT EXISTS mlb_walk_up_songs (
         id SERIAL PRIMARY KEY,
         team VARCHAR(50) NOT NULL,
         player VARCHAR(255) NOT NULL,
@@ -101,9 +101,9 @@ def create_fixed_database_schema(engine):
     );
     
     -- Index for efficient querying
-    CREATE INDEX IF NOT EXISTS idx_player_current ON mlb_walk_up_songs_v2 (team, player, is_current);
-    CREATE INDEX IF NOT EXISTS idx_first_seen ON mlb_walk_up_songs_v2 (first_seen_date);
-    CREATE INDEX IF NOT EXISTS idx_last_updated ON mlb_walk_up_songs_v2 (last_updated_date);
+    CREATE INDEX IF NOT EXISTS idx_player_current ON mlb_walk_up_songs (team, player, is_current);
+    CREATE INDEX IF NOT EXISTS idx_first_seen ON mlb_walk_up_songs (first_seen_date);
+    CREATE INDEX IF NOT EXISTS idx_last_updated ON mlb_walk_up_songs (last_updated_date);
     """
     
     with engine.connect() as conn:
@@ -120,7 +120,7 @@ def get_existing_songs(engine):
             result = conn.execute(text("""
                 SELECT team, player, song_name, song_artist, spotify_uri, explicit, 
                        first_seen_date, last_updated_date
-                FROM mlb_walk_up_songs_v2 
+                FROM mlb_walk_up_songs 
                 WHERE is_current = TRUE
             """))
             
@@ -210,7 +210,7 @@ def store_songs_with_change_tracking(engine, new_songs, changed_songs, unchanged
                 players_with_changes = [(song['team'], song['player']) for song in changed_songs]
                 for team, player in players_with_changes:
                     conn.execute(text("""
-                        UPDATE mlb_walk_up_songs_v2 
+                        UPDATE mlb_walk_up_songs 
                         SET is_current = FALSE, updated_at = CURRENT_TIMESTAMP
                         WHERE team = :team AND player = :player AND is_current = TRUE
                     """), {'team': team, 'player': player})
@@ -219,7 +219,7 @@ def store_songs_with_change_tracking(engine, new_songs, changed_songs, unchanged
             all_new_entries = new_songs + changed_songs
             if all_new_entries:
                 conn.execute(text("""
-                    INSERT INTO mlb_walk_up_songs_v2 
+                    INSERT INTO mlb_walk_up_songs 
                     (team, player, song_name, song_artist, spotify_uri, explicit, 
                      first_seen_date, last_updated_date, is_current)
                     VALUES (:team, :player, :song_name, :song_artist, :spotify_uri, 
@@ -230,7 +230,7 @@ def store_songs_with_change_tracking(engine, new_songs, changed_songs, unchanged
             if unchanged_songs:
                 for song in unchanged_songs:
                     conn.execute(text("""
-                        UPDATE mlb_walk_up_songs_v2 
+                        UPDATE mlb_walk_up_songs 
                         SET last_updated_date = :last_updated_date, updated_at = CURRENT_TIMESTAMP
                         WHERE team = :team AND player = :player AND song_name = :song_name
                     """), song)
@@ -343,7 +343,7 @@ def get_database_engine():
                 "keepalives_idle": 60,
                 "keepalives_interval": 30,
                 "keepalives_count": 3,
-                "application_name": "mlb_walkup_scraper_v2",
+                "application_name": "mlb_walkup_scraper",
                 "options": "-c statement_timeout=60000",
             },
         )
