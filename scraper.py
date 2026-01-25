@@ -81,36 +81,37 @@ MLB_TEAMS = {
 }
 
 
-def create_fixed_database_schema(engine):
-    """Create the improved database schema with proper change tracking."""
-    create_table_sql = """
-    CREATE TABLE IF NOT EXISTS mlb_walk_up_songs (
-        id SERIAL PRIMARY KEY,
-        team VARCHAR(50) NOT NULL,
-        player VARCHAR(255) NOT NULL,
-        song_name VARCHAR(500) NOT NULL,
-        song_artist VARCHAR(500),
-        spotify_uri VARCHAR(255),
-        explicit BOOLEAN,
-        first_seen_date DATE NOT NULL,
-        last_updated_date DATE NOT NULL,
-        is_current BOOLEAN DEFAULT TRUE,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        UNIQUE(team, player, song_name)
-    );
-    
-    -- Index for efficient querying
-    CREATE INDEX IF NOT EXISTS idx_player_current ON mlb_walk_up_songs (team, player, is_current);
-    CREATE INDEX IF NOT EXISTS idx_first_seen ON mlb_walk_up_songs (first_seen_date);
-    CREATE INDEX IF NOT EXISTS idx_last_updated ON mlb_walk_up_songs (last_updated_date);
+def verify_database_schema(engine):
+    """Verify the database schema exists with required columns.
+
+    The schema should be created via supabase_schema.sql before running the scraper.
     """
-    
+    # Check what tables exist (for debugging)
     with engine.connect() as conn:
-        conn.execute(text(create_table_sql))
-        conn.commit()
-    
-    log("✅ Fixed database schema created successfully!")
+        # List all tables in public schema
+        tables_result = conn.execute(text("""
+            SELECT table_name FROM information_schema.tables
+            WHERE table_schema = 'public' AND table_type = 'BASE TABLE'
+        """))
+        tables = [row[0] for row in tables_result]
+        log(f"📋 Tables in database: {tables}")
+
+        # Check for mlb_walk_up_songs with is_current column
+        check_sql = """
+        SELECT column_name FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'mlb_walk_up_songs'
+          AND column_name = 'is_current'
+        """
+        result = conn.execute(text(check_sql))
+        if result.fetchone():
+            log("✅ Database schema verified")
+            return
+
+        raise ValueError(
+            "Table 'mlb_walk_up_songs' not found or missing 'is_current' column. "
+            "Run supabase_schema.sql in Supabase SQL Editor first."
+        )
 
 
 def get_existing_songs(engine):
@@ -311,22 +312,25 @@ def validate_connection_uri(uri):
 def get_database_engine():
     """Create a database connection with connection pooling and retries."""
     try:
-        # Get connection parameters from environment variables
-        db_user = os.getenv("DB_USER")
-        db_password = os.getenv("DB_PASSWORD")
-        db_host = os.getenv("DB_HOST")
-        db_port = os.getenv("DB_PORT", "5432")
-        db_name = os.getenv("DB_NAME")
+        # Option 1: Use DATABASE_URL directly (recommended for Supabase)
+        connection_uri = os.getenv("DATABASE_URL")
 
-        if not all([db_user, db_password, db_host, db_name]):
-            raise ValueError(
-                "Missing required database connection parameters in environment variables"
+        if not connection_uri:
+            # Option 2: Build from individual env vars (legacy support)
+            db_user = os.getenv("DB_USER")
+            db_password = os.getenv("DB_PASSWORD")
+            db_host = os.getenv("DB_HOST")
+            db_port = os.getenv("DB_PORT", "5432")
+            db_name = os.getenv("DB_NAME")
+
+            if not all([db_user, db_password, db_host, db_name]):
+                raise ValueError(
+                    "Set DATABASE_URL or DB_USER, DB_PASSWORD, DB_HOST, DB_NAME env vars"
+                )
+
+            connection_uri = (
+                f"postgresql://{db_user}:{db_password}@{db_host}:{db_port}/{db_name}"
             )
-
-        # Construct connection URI from environment variables
-        connection_uri = (
-            f"postgresql://{db_user}:{db_password}@{db_host}:{db_port}/{db_name}"
-        )
 
         # Create connection pool with optimized settings
         engine = create_engine(
@@ -633,7 +637,7 @@ def main():
         sys.exit(1)
     
     # Create fixed schema
-    create_fixed_database_schema(engine)
+    verify_database_schema(engine)
     
     # Get existing songs for comparison
     existing_songs = get_existing_songs(engine)
