@@ -369,6 +369,23 @@ edited_df = st.data_editor(
 # Selected songs
 selected_rows = edited_df[edited_df["Select"]]
 
+# Show embedded Spotify player for the last selected song
+if not selected_rows.empty:
+    # Get last selected song with Spotify URI
+    songs_with_spotify = selected_rows[selected_rows["spotify_uri"].notna()]
+    if not songs_with_spotify.empty:
+        last_song = songs_with_spotify.iloc[-1]
+        track_id = last_song["spotify_uri"].replace("https://open.spotify.com/track/", "")
+        embed_url = f"https://open.spotify.com/embed/track/{track_id}?utm_source=generator&theme=0"
+
+        st.markdown(f"""
+        <div style="display: flex; justify-content: center; margin: 1rem 0;">
+            <iframe src="{embed_url}" width="100%" height="152" frameBorder="0"
+                    allowfullscreen="" allow="autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture"
+                    loading="lazy" style="border-radius: 12px; max-width: 600px;"></iframe>
+        </div>
+        """, unsafe_allow_html=True)
+
 st.divider()
 
 # Playlist creation
