@@ -210,7 +210,7 @@ st.markdown("""
 # Stats row
 stats = get_stats()
 col1, col2, col3, col4 = st.columns(4)
-col1.metric("🎵 Songs", stats["songs"])
+col1.metric("🎵 Unique Songs", stats["songs"])
 col2.metric("👤 Players", stats["players"])
 col3.metric("🏟️ Teams", stats["teams"])
 col4.metric("🎧 On Spotify", stats["spotify_songs"])
