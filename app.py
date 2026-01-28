@@ -124,29 +124,27 @@ def get_supabase_client() -> Client:
 
 
 @st.cache_data(ttl=300)
-def get_current_walkup_songs():
-    """Get all current walkup songs from Supabase."""
+def get_walkup_songs():
+    """Get all walkup songs from Supabase (including historical)."""
     supabase = get_supabase_client()
-    response = supabase.table("mlb_walk_up_songs").select("*").eq("is_current", True).execute()
+    response = supabase.table("mlb_walk_up_songs").select("*").execute()
 
     if not response.data:
         return pd.DataFrame()
 
     df = pd.DataFrame(response.data)
     df["team"] = df["team"].str.title()
+    # Convert date columns
+    df["first_seen_date"] = pd.to_datetime(df["first_seen_date"]).dt.date
+    df["last_updated_date"] = pd.to_datetime(df["last_updated_date"]).dt.date
     return df
 
 
-@st.cache_data(ttl=300)
-def get_stats():
-    """Get summary statistics."""
-    supabase = get_supabase_client()
-    response = supabase.table("mlb_walk_up_songs").select("*").eq("is_current", True).execute()
-
-    if not response.data:
+def get_stats(df):
+    """Get summary statistics from dataframe."""
+    if df.empty:
         return {"songs": 0, "players": 0, "teams": 0, "spotify_songs": 0}
 
-    df = pd.DataFrame(response.data)
     return {
         "songs": df["song_name"].nunique(),
         "players": df["player"].nunique(),
@@ -207,8 +205,12 @@ st.markdown("""
 </p>
 """, unsafe_allow_html=True)
 
+# Load data early for stats
+all_data_for_stats = get_walkup_songs()
+current_data = all_data_for_stats[all_data_for_stats["is_current"]] if not all_data_for_stats.empty else all_data_for_stats
+
 # Stats row
-stats = get_stats()
+stats = get_stats(current_data)
 col1, col2, col3, col4 = st.columns(4)
 col1.metric("🎵 Unique Songs", stats["songs"])
 col2.metric("👤 Players", stats["players"])
@@ -300,20 +302,41 @@ else:
 
 st.divider()
 
-# Main content
-data = get_current_walkup_songs()
+# Initialize playlist in session state
+if "playlist_songs" not in st.session_state:
+    st.session_state.playlist_songs = []
 
-if data.empty:
+# Main content - reuse data loaded for stats
+all_data = all_data_for_stats
+
+if all_data.empty:
     st.warning("No walkup songs found. Run the scraper to populate the database.")
     st.stop()
 
 # Filters in a styled container
 st.subheader("🔍 Filter Songs")
+
+# Date range filter
+today = datetime.date.today()
+date_col1, date_col2 = st.columns(2)
+with date_col1:
+    start_date = st.date_input(
+        "Active from",
+        value=today,
+        help="Show songs active on or after this date"
+    )
+with date_col2:
+    end_date = st.date_input(
+        "Active until",
+        value=today,
+        help="Show songs active on or before this date"
+    )
+
 with st.container():
     filter_col1, filter_col2, filter_col3 = st.columns([2, 1, 1])
 
     with filter_col1:
-        teams = ["All Teams"] + sorted(data["team"].unique().tolist())
+        teams = ["All Teams"] + sorted(all_data["team"].unique().tolist())
         selected_team = st.selectbox("Team", teams, label_visibility="collapsed",
                                       help="Filter by MLB team")
 
@@ -324,7 +347,15 @@ with st.container():
         filter_spotify_only = st.checkbox("Spotify only", help="Only show songs available on Spotify")
 
 # Apply filters
-filtered_data = data.copy()
+filtered_data = all_data.copy()
+
+# Date filter: song was active during the date range
+# A song is active if first_seen_date <= end_date AND last_updated_date >= start_date
+filtered_data = filtered_data[
+    (filtered_data["first_seen_date"] <= end_date) &
+    (filtered_data["last_updated_date"] >= start_date)
+]
+
 if selected_team != "All Teams":
     filtered_data = filtered_data[filtered_data["team"] == selected_team]
 if filter_explicit:
@@ -332,103 +363,178 @@ if filter_explicit:
 if filter_spotify_only:
     filtered_data = filtered_data[filtered_data["spotify_uri"].notna()]
 
-# Add selection column
+# Add selection column - check against session state playlist
 filtered_data = filtered_data.reset_index(drop=True)
-filtered_data.insert(0, "Select", False)
+
+# Create unique key for each song
+def get_song_key(row):
+    return f"{row['team']}|{row['player']}|{row['song_name']}"
+
+filtered_data["_key"] = filtered_data.apply(get_song_key, axis=1)
+filtered_data.insert(0, "Add", filtered_data["_key"].isin(st.session_state.playlist_songs))
 
 # Display data
 st.subheader(f"🎶 Songs ({len(filtered_data)})")
 
-# Prepare display columns
-display_cols = ["Select", "team", "player", "song_name", "song_artist", "explicit", "spotify_uri"]
+# Prepare display columns (no Play column - use last added song for preview)
+display_cols = ["Add", "team", "player", "song_name", "song_artist", "explicit", "spotify_uri", "_key"]
 display_data = filtered_data[display_cols].copy()
 
-# Convert spotify_uri to clickable links
-display_data["spotify_uri"] = display_data["spotify_uri"].apply(
+# Convert explicit to text
+display_data["explicit"] = display_data["explicit"].apply(lambda x: "Explicit" if x else "")
+
+# Store original spotify_uri for player before converting to link
+display_data["_spotify_uri_original"] = filtered_data["spotify_uri"].copy()
+display_data["spotify_uri"] = display_data["_spotify_uri_original"].apply(
     lambda x: x.replace("spotify:track:", "https://open.spotify.com/track/") if x else None
 )
 
 column_config = {
-    "Select": st.column_config.CheckboxColumn("✓", default=False, width="small"),
+    "Add": st.column_config.CheckboxColumn("Add", default=False, width="small"),
     "team": st.column_config.TextColumn("Team", width="medium"),
     "player": st.column_config.TextColumn("Player", width="medium"),
     "song_name": st.column_config.TextColumn("Song", width="large"),
     "song_artist": st.column_config.TextColumn("Artist", width="medium"),
-    "explicit": st.column_config.CheckboxColumn("🔞", width="small"),
+    "explicit": st.column_config.TextColumn("Explicit", width="small"),
     "spotify_uri": st.column_config.LinkColumn("Spotify", width="small", display_text="Open"),
+    "_key": None,
+    "_spotify_uri_original": None,
 }
 
-edited_df = st.data_editor(
-    display_data,
-    column_config=column_config,
-    hide_index=True,
-    width="stretch",
-    disabled=["team", "player", "song_name", "song_artist", "explicit", "spotify_uri"],
-)
+# Track the last added song for preview
+if "last_added_key" not in st.session_state:
+    st.session_state.last_added_key = None
 
-# Selected songs
-selected_rows = edited_df[edited_df["Select"]]
+# Store display_data in session state for fragment access
+st.session_state._display_data = display_data
 
-# Show embedded Spotify player for the last selected song
-if not selected_rows.empty:
-    # Get last selected song with Spotify URI
-    songs_with_spotify = selected_rows[selected_rows["spotify_uri"].notna()]
-    if not songs_with_spotify.empty:
-        last_song = songs_with_spotify.iloc[-1]
-        track_id = last_song["spotify_uri"].replace("https://open.spotify.com/track/", "")
-        embed_url = f"https://open.spotify.com/embed/track/{track_id}?utm_source=generator&theme=0"
+@st.fragment
+def song_table_with_player():
+    """Fragment containing data editor and player - prevents full page rerun."""
+    disp_data = st.session_state._display_data
 
-        st.markdown(f"""
-        <div style="display: flex; justify-content: center; margin: 1rem 0;">
-            <iframe src="{embed_url}" width="100%" height="152" frameBorder="0"
-                    allowfullscreen="" allow="autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture"
-                    loading="lazy" style="border-radius: 12px; max-width: 600px;"></iframe>
-        </div>
-        """, unsafe_allow_html=True)
+    def handle_table_edit():
+        """Handle checkbox changes from data editor."""
+        if "songs_table" not in st.session_state:
+            return
+
+        edits = st.session_state.songs_table.get("edited_rows", {})
+
+        for row_idx_str, changes in edits.items():
+            row_idx = int(row_idx_str)
+            if row_idx >= len(disp_data):
+                continue
+
+            key = disp_data.iloc[row_idx]["_key"]
+
+            if "Add" in changes:
+                if changes["Add"]:
+                    if key not in st.session_state.playlist_songs:
+                        st.session_state.playlist_songs.append(key)
+                        st.session_state.last_added_key = key
+                else:
+                    if key in st.session_state.playlist_songs:
+                        st.session_state.playlist_songs.remove(key)
+
+    st.data_editor(
+        disp_data,
+        column_config=column_config,
+        hide_index=True,
+        use_container_width=True,
+        height=500,
+        disabled=["team", "player", "song_name", "song_artist", "explicit", "spotify_uri", "_key", "_spotify_uri_original"],
+        key="songs_table",
+        on_change=handle_table_edit,
+    )
+
+    # Show embedded player for the last added song
+    preview_key = st.session_state.last_added_key
+    if not preview_key and st.session_state.playlist_songs:
+        preview_key = st.session_state.playlist_songs[-1]
+
+    if preview_key:
+        preview_song_data = disp_data[disp_data["_key"] == preview_key]
+        if not preview_song_data.empty:
+            spotify_uri = preview_song_data.iloc[0]["_spotify_uri_original"]
+            if spotify_uri:
+                track_id = spotify_uri.replace("spotify:track:", "")
+                embed_url = f"https://open.spotify.com/embed/track/{track_id}?utm_source=generator&theme=0"
+
+                st.markdown(f"""
+                <div style="display: flex; justify-content: center; margin: 1rem 0;">
+                    <iframe src="{embed_url}" width="100%" height="152" frameBorder="0"
+                            allowfullscreen="" allow="autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture"
+                            loading="lazy" style="border-radius: 12px; max-width: 600px;"></iframe>
+                </div>
+                """, unsafe_allow_html=True)
+
+song_table_with_player()
+
+# Button to sync playlist view (since fragment doesn't trigger full page rerun)
+if st.button("⬇️ Add selection to playlist", help="Update the playlist view below"):
+    st.rerun()
+
+# Get all playlist songs data for display (outside fragment for playlist section)
+playlist_data = all_data[all_data.apply(get_song_key, axis=1).isin(st.session_state.playlist_songs)].copy()
 
 st.divider()
 
-# Playlist creation
-st.subheader("📀 Create Playlist")
+# Playlist creation section
+st.markdown("""
+<h2 style="margin-bottom: 1rem;">📀 Your Playlist</h2>
+""", unsafe_allow_html=True)
 
-if selected_rows.empty:
-    st.info("Select songs above to create a playlist")
+if not st.session_state.playlist_songs:
+    st.info("Select songs from the table above to add them to your playlist")
 else:
-    st.write(f"**{len(selected_rows)}** songs selected")
+    # Show playlist summary
+    st.markdown(f"""
+    <div style="
+        background: linear-gradient(135deg, #1DB954 0%, #169c46 100%);
+        padding: 1.5rem;
+        border-radius: 12px;
+        margin-bottom: 1rem;
+    ">
+        <span style="color: white; font-size: 1.5rem; font-weight: 600;">
+            {len(st.session_state.playlist_songs)} songs selected
+        </span>
+    </div>
+    """, unsafe_allow_html=True)
 
-    with st.form("playlist_form"):
-        playlist_name = st.text_input(
-            "Playlist name",
-            value=f"MLB Walkup Songs - {datetime.date.today()}",
-            max_chars=50,
-        )
+    # Playlist name input
+    playlist_name = st.text_input(
+        "Playlist name",
+        value=f"MLB Walkup Songs - {datetime.date.today()}",
+        max_chars=50,
+    )
 
-        col1, col2 = st.columns([1, 3])
-        with col1:
-            submit = st.form_submit_button(
-                "Create Playlist",
-                type="primary",
-                disabled=not spotify,
-            )
-
+    # Create playlist button - prominent
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
         if not spotify:
             st.warning("Login to Spotify to create playlists")
+            create_disabled = True
+        else:
+            create_disabled = False
 
-        if submit and spotify:
-            # Filter to songs with Spotify URIs
-            spotify_tracks = selected_rows[selected_rows["spotify_uri"].notna()]["spotify_uri"].tolist()
+        if st.button(
+            "🎵 Create Spotify Playlist",
+            type="primary",
+            disabled=create_disabled,
+            use_container_width=True,
+        ):
+            # Get Spotify URIs for playlist songs
+            spotify_tracks = playlist_data[playlist_data["spotify_uri"].notna()]["spotify_uri"].tolist()
 
             if not spotify_tracks:
                 st.error("No selected songs have Spotify links")
             else:
-                # Convert URLs back to URIs for Spotify API
                 track_uris = [
-                    url.replace("https://open.spotify.com/track/", "spotify:track:")
-                    for url in spotify_tracks
+                    uri if uri.startswith("spotify:track:") else f"spotify:track:{uri}"
+                    for uri in spotify_tracks
                 ]
 
                 try:
-                    # Create playlist
                     me = spotify.me()
                     if not me:
                         st.error("Could not get Spotify user info")
@@ -441,7 +547,6 @@ else:
                         description="Created with MLB Walkup Songs app",
                     )
 
-                    # Add tracks
                     spotify.user_playlist_add_tracks(
                         user=user_id,
                         playlist_id=playlist["id"],
@@ -455,6 +560,21 @@ else:
                     )
                 except Exception as e:
                     st.error(f"Failed to create playlist: {e}")
+
+    # Clear playlist button
+    if st.button("Clear playlist", type="secondary"):
+        st.session_state.playlist_songs = []
+        st.rerun()
+
+    # Show selected songs table
+    st.subheader("Selected Songs")
+    playlist_display = playlist_data[["team", "player", "song_name", "song_artist"]].copy()
+    playlist_display.columns = ["Team", "Player", "Song", "Artist"]
+    st.dataframe(
+        playlist_display,
+        hide_index=True,
+        use_container_width=True,
+    )
 
 # Footer
 st.divider()
