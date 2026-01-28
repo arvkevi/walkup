@@ -316,19 +316,20 @@ if all_data.empty:
 # Filters in a styled container
 st.subheader("🔍 Filter Songs")
 
-# Date range filter
-today = datetime.date.today()
+# Date range filter - use most recent data date to avoid timezone issues
+# This ensures users always see data even if server is in a different timezone
+most_recent_date = all_data["last_updated_date"].max() if not all_data.empty else datetime.date.today()
 date_col1, date_col2 = st.columns(2)
 with date_col1:
     start_date = st.date_input(
         "Active from",
-        value=today,
+        value=most_recent_date,
         help="Show songs active on or after this date"
     )
 with date_col2:
     end_date = st.date_input(
         "Active until",
-        value=today,
+        value=most_recent_date,
         help="Show songs active on or before this date"
     )
 
