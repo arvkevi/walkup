@@ -2,7 +2,10 @@ name: MLB Walk-up Songs Scraper
 
 on:
   schedule:
-    - cron: '0 0 * * *'  # Run daily at midnight UTC
+    # Run daily at midnight UTC
+    # Note: GitHub automatically disables scheduled workflows after 60 days of repo inactivity.
+    # If schedule stops working, re-enable via Actions tab or modify this file.
+    - cron: '0 0 * * *'
   workflow_dispatch:  # Allow manual triggering
 
 jobs:
