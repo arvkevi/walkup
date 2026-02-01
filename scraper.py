@@ -557,7 +557,75 @@ def scrape_team_songs(url, team, sp):
                                 )
 
             except Exception:
-                log(f"{team}: walkup music method failed, skipping...")
+                log(f"{team}: walkup music method failed, trying simple table method...")
+
+        # Method 3: Simple HTML table (used by Angels and some other teams)
+        if not songs:
+            try:
+                # Find tables on the page
+                tables = bsteam.find_all("table")
+                for table in tables:
+                    # Look for tables with PLAYER, SONG, ARTIST headers
+                    headers = table.find_all("th")
+                    header_texts = [h.get_text().strip().upper() for h in headers]
+
+                    if "PLAYER" in header_texts and "SONG" in header_texts:
+                        player_idx = header_texts.index("PLAYER")
+                        song_idx = header_texts.index("SONG")
+                        artist_idx = header_texts.index("ARTIST") if "ARTIST" in header_texts else None
+
+                        rows = table.find_all("tr")
+                        current_player = None
+
+                        for row in rows:
+                            cells = row.find_all("td")
+                            if not cells or len(cells) < 2:
+                                continue
+
+                            # Get player name (may be empty for multi-song players)
+                            player_cell = cells[player_idx].get_text().strip()
+                            if player_cell:
+                                current_player = player_cell
+
+                            if not current_player:
+                                continue
+
+                            # Get song name
+                            song_name = cells[song_idx].get_text().strip() if len(cells) > song_idx else ""
+
+                            # Get artist name
+                            artist_name = ""
+                            if artist_idx is not None and len(cells) > artist_idx:
+                                artist_name = cells[artist_idx].get_text().strip()
+
+                            if song_name:
+                                # Search for song on Spotify
+                                spotify_data = None
+                                if sp and song_name and artist_name:
+                                    try:
+                                        search_query = f"track:{song_name} artist:{artist_name}"
+                                        results = sp.search(q=search_query, type="track", limit=1)
+                                        if results["tracks"]["items"]:
+                                            spotify_data = results["tracks"]["items"][0]
+                                        time.sleep(0.2)
+                                    except Exception:
+                                        log(f"Spotify search error for {song_name}")
+                                        spotify_data = None
+
+                                songs.append({
+                                    "team": team,
+                                    "player": current_player,
+                                    "song_name": song_name,
+                                    "song_artist": artist_name,
+                                    "spotify_uri": spotify_data["uri"] if spotify_data else None,
+                                    "explicit": spotify_data["explicit"] if spotify_data else None,
+                                })
+
+                        if songs:
+                            break  # Found songs, no need to check other tables
+
+            except Exception as e:
+                log(f"{team}: simple table method failed: {str(e)}")
 
         if songs:
             log(f"Found {len(songs)} songs for {team}")
