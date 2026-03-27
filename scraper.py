@@ -220,11 +220,18 @@ def store_songs_with_change_tracking(engine, new_songs, changed_songs, unchanged
             all_new_entries = new_songs + changed_songs
             if all_new_entries:
                 conn.execute(text("""
-                    INSERT INTO mlb_walk_up_songs 
-                    (team, player, song_name, song_artist, spotify_uri, explicit, 
+                    INSERT INTO mlb_walk_up_songs
+                    (team, player, song_name, song_artist, spotify_uri, explicit,
                      first_seen_date, last_updated_date, is_current)
-                    VALUES (:team, :player, :song_name, :song_artist, :spotify_uri, 
+                    VALUES (:team, :player, :song_name, :song_artist, :spotify_uri,
                             :explicit, :first_seen_date, :last_updated_date, :is_current)
+                    ON CONFLICT (team, player, song_name) DO UPDATE SET
+                        song_artist = EXCLUDED.song_artist,
+                        spotify_uri = EXCLUDED.spotify_uri,
+                        explicit = EXCLUDED.explicit,
+                        last_updated_date = EXCLUDED.last_updated_date,
+                        is_current = TRUE,
+                        updated_at = CURRENT_TIMESTAMP
                 """), all_new_entries)
             
             # Update last_updated_date for unchanged songs
