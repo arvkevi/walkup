@@ -32,3 +32,23 @@ jobs:
         SPOTIFY_CLIENT_SECRET: ${{ secrets.SPOTIFY_CLIENT_SECRET }}
       run: |
         python scraper.py "$SPOTIFY_CLIENT_ID" "$SPOTIFY_CLIENT_SECRET"
+
+    - name: Export DB snapshot for Kaggle
+      env:
+        DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
+      run: |
+        pip install kaggle
+        python export_to_kaggle.py
+
+    - name: Publish to Kaggle
+      env:
+        KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
+        KAGGLE_KEY: ${{ secrets.KAGGLE_KEY }}
+      run: |
+        msg="Daily update $(date -u +%Y-%m-%d)"
+        # Try to push a new version; if the dataset doesn't exist yet, create it (private by default).
+        if ! kaggle datasets version -p kaggle_export -m "$msg" --dir-mode zip; then
+          echo "Version push failed — attempting first-time create"
+          kaggle datasets create -p kaggle_export --dir-mode zip
+        fi
