@@ -39,7 +39,6 @@ jobs:
         KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
       run: |
         pip install "kaggle==1.6.17"
-        python -c "import kaggle"  # fail fast if the wheel is broken
         python export_to_kaggle.py
 
     - name: Publish to Kaggle
