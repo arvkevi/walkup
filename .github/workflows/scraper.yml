@@ -38,7 +38,7 @@ jobs:
         DATABASE_URL: ${{ secrets.DATABASE_URL }}
         KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
       run: |
-        pip install "kaggle==1.6.17"
+        pip install "kaggle==2.2.4"
         python export_to_kaggle.py
 
     - name: Publish to Kaggle
