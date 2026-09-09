@@ -11,7 +11,8 @@ The Kaggle CLI then publishes that directory as a new version of the dataset
 
 Env vars:
   DATABASE_URL     Postgres connection string
-  KAGGLE_USERNAME  Kaggle account that owns the dataset
+  KAGGLE_USERNAME  Kaggle account used to authenticate with the Kaggle API
+  KAGGLE_DATASET_OWNER  Kaggle account/organization that owns the dataset
   KAGGLE_SLUG      Dataset slug (default: daily-mlb-walkup-songs)
 """
 
@@ -30,6 +31,7 @@ CSV_NAME = "mlb_walk_up_songs.csv"
 def main() -> int:
     db_url = os.environ["DATABASE_URL"]
     username = os.environ["KAGGLE_USERNAME"]
+    dataset_owner = os.environ.get("KAGGLE_DATASET_OWNER") or username
     slug = os.environ.get("KAGGLE_SLUG", "daily-mlb-walkup-songs")
 
     EXPORT_DIR.mkdir(exist_ok=True)
@@ -42,7 +44,7 @@ def main() -> int:
 
     metadata = {
         "title": "Daily MLB Walk-up Songs",
-        "id": f"{username}/{slug}",
+        "id": f"{dataset_owner}/{slug}",
         "licenses": [{"name": "CC0-1.0"}],
         "resources": [
             {
