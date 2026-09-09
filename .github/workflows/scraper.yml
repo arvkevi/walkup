@@ -44,6 +44,10 @@ jobs:
 
     - name: Publish to Kaggle
       env:
+        # Legacy KAGGLE_USERNAME/KAGGLE_KEY stopped being accepted server-side on
+        # 2026-09-07 (old API key revoked when OAuth login was set up). The CLI
+        # tries KAGGLE_API_TOKEN first; keep legacy vars as fallback only.
+        KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN }}
         KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
         KAGGLE_KEY: ${{ secrets.KAGGLE_KEY }}
       run: |
