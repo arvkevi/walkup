@@ -37,6 +37,7 @@ jobs:
       env:
         DATABASE_URL: ${{ secrets.DATABASE_URL }}
         KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
+        KAGGLE_DATASET_OWNER: ${{ vars.KAGGLE_DATASET_OWNER || secrets.KAGGLE_DATASET_OWNER || secrets.KAGGLE_USERNAME }}
       run: |
         pip install "kaggle==1.6.17"
         python export_to_kaggle.py
