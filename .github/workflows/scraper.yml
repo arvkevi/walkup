@@ -39,7 +39,7 @@ jobs:
         KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
         KAGGLE_DATASET_OWNER: ${{ vars.KAGGLE_DATASET_OWNER || secrets.KAGGLE_DATASET_OWNER || secrets.KAGGLE_USERNAME }}
       run: |
-        pip install "kaggle==1.6.17"
+        pip install "kaggle==2.2.4"
         python export_to_kaggle.py
 
     - name: Publish to Kaggle
