@@ -2,7 +2,7 @@ backoff
 beautifulsoup4
 lxml
 pandas
-psycopg2-binary
+psycopg[binary]
 pytz
 requests
 spotipy
