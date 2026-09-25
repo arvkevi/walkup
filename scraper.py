@@ -30,7 +30,7 @@ import backoff  # For retrying failed operations
 import socket
 import os
 import logging
-import psycopg2
+import psycopg
 from sqlalchemy.pool import QueuePool
 from sqlalchemy.exc import OperationalError
 from urllib.parse import urlparse
@@ -290,9 +290,9 @@ def validate_connection_uri(uri):
     if not uri:
         raise ValueError("Connection URI cannot be empty")
 
-    if not uri.startswith(("postgresql://", "postgresql+psycopg2://")):
+    if not uri.startswith(("postgresql://", "postgresql+psycopg://")):
         raise ValueError(
-            "Connection URI must start with postgresql:// or postgresql+psycopg2://"
+            "Connection URI must start with postgresql:// or postgresql+psycopg://"
         )
 
     try:
@@ -338,6 +338,9 @@ def get_database_engine():
             connection_uri = (
                 f"postgresql://{db_user}:{db_password}@{db_host}:{db_port}/{db_name}"
             )
+
+        # Force the psycopg 3 driver; bare postgresql:// makes SQLAlchemy load psycopg2
+        connection_uri = connection_uri.replace("postgresql://", "postgresql+psycopg://", 1)
 
         # Create connection pool with optimized settings
         engine = create_engine(

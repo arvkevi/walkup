@@ -29,7 +29,8 @@ CSV_NAME = "mlb_walk_up_songs.csv"
 
 
 def main() -> int:
-    db_url = os.environ["DATABASE_URL"]
+    # Force the psycopg 3 driver; bare postgresql:// makes SQLAlchemy load psycopg2
+    db_url = os.environ["DATABASE_URL"].replace("postgresql://", "postgresql+psycopg://", 1)
     username = os.environ["KAGGLE_USERNAME"]
     dataset_owner = os.environ.get("KAGGLE_DATASET_OWNER") or username
     slug = os.environ.get("KAGGLE_SLUG", "daily-mlb-walkup-songs")
